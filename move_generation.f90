@@ -34,7 +34,7 @@ CONTAINS
 
         INTEGER :: r, f, dir, start_rank, promotion_rank, next_r, dbl_r, target_f
         INTEGER :: player_color, opponent_color, target_color, target_piece
-        TYPE(Square_Type) :: to_sq, ep_sq
+        TYPE(Square_Type) :: to_sq
         TYPE(Move_Type) :: new_move
         LOGICAL :: can_promote
         INTEGER, DIMENSION(4) :: promotion_options = (/ QUEEN, ROOK, BISHOP, KNIGHT /)

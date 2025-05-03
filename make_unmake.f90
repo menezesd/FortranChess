@@ -18,7 +18,7 @@ CONTAINS
         TYPE(UnmakeInfo_Type), INTENT(OUT) :: unmake_info
 
         INTEGER :: r_from, f_from, r_to, f_to, player_color, opponent_color
-        INTEGER :: piece_moved, color_moved, r_capture, back_rank
+        INTEGER :: piece_moved, color_moved, r_capture
         TYPE(Square_Type) :: from_sq, to_sq
 
         player_color = board%current_player

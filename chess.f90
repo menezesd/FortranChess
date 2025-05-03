@@ -1,4 +1,3 @@
-
 ! ============================================
 ! Main Program: Human vs Computer
 ! ============================================
@@ -13,7 +12,7 @@ PROGRAM Fortran_Chess
     TYPE(Board_Type) :: game_board
     TYPE(Move_Type) :: chosen_move
     TYPE(UnmakeInfo_Type) :: move_info ! Needed for make_move call
-    LOGICAL :: move_found, is_human_turn, game_over, is_checkmate_flag, is_stalemate_flag
+    LOGICAL :: move_found, is_human_turn, game_over
     INTEGER :: human_player_color, ai_player_color, winner
     INTEGER :: search_depth
     CHARACTER(LEN=10) :: user_input

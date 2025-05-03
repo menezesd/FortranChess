@@ -58,7 +58,7 @@ CONTAINS
     SUBROUTINE init_board(board)
         TYPE(Board_Type), INTENT(OUT) :: board
 
-        INTEGER :: i, f
+        INTEGER :: f
         INTEGER, DIMENSION(BOARD_SIZE) :: back_rank_pieces = &
                 (/ ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK /)
 
