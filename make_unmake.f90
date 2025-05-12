@@ -134,7 +134,7 @@ CONTAINS
         TYPE(Move_Type), INTENT(IN) :: move
         TYPE(UnmakeInfo_Type), INTENT(IN) :: unmake_info
 
-        INTEGER :: r_from, f_from, r_to, f_to, player_color, opponent_color
+        INTEGER :: r_from, f_from, r_to, f_to, player_color
         INTEGER :: piece_to_restore, color_to_restore
 
         ! 1. Switch Player Back
