@@ -1,6 +1,6 @@
 # Fortran compiler
 FC = gfortran
-FFLAGS = -Wall -O2
+FFLAGS = -O3
 
 # Source files
 SRC = chess.f90 board_utils.f90 chess_types.f90 evaluation.f90 make_unmake.f90 move_generation.f90 search.f90

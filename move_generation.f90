@@ -347,10 +347,10 @@ CONTAINS
         INTEGER :: r, f, piece, color
         TYPE(Square_Type) :: from_sq
         ! Define directions for sliding pieces here
-        INTEGER, DIMENSION(4, 2) :: bishop_dirs = RESHAPE((/  1,  1,  1, -1, -1,  1, -1, -1 /), (/4, 2/))
+        INTEGER, DIMENSION(4, 2) :: bishop_dirs = RESHAPE((/  1,  1,  -1, -1, -1,  1, 1, -1 /), (/4, 2/))
         INTEGER, DIMENSION(4, 2) :: rook_dirs = RESHAPE((/  1,  0, -1,  0,  0,  1,  0, -1 /), (/4, 2/))
-        INTEGER, DIMENSION(8, 2) :: queen_dirs = RESHAPE([ 1, -1,  0,  0,  1,  1, -1, -1, &
-                                                   0,  0,  1, -1, 1, -1,  1, -1 ], [8, 2])
+        INTEGER, DIMENSION(8, 2) :: queen_dirs = RESHAPE((/ 1, -1,  0,  0,  1,  1, -1, -1, &
+                                                   0,  0,  1, -1, 1, -1,  1, -1 /), (/8, 2/))
 
         num_moves = 0 ! Reset count
 
