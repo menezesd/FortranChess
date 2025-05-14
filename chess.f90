@@ -22,7 +22,7 @@ PROGRAM Fortran_Chess
     TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
     INTEGER :: num_legal_moves, i
 
-    search_depth = 4 ! AI Difficulty
+    search_depth = 5 ! AI Difficulty
 
     ! --- Player Color Selection ---
     DO
