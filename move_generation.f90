@@ -12,6 +12,15 @@ MODULE Move_Generation
 CONTAINS
 
     ! --- Helper to add a move to the list if array not full ---
+    ! Adds a move to the move list array, checking for overflow.
+    !
+    ! Parameters:
+    !   move_list (INOUT): Array to store moves
+    !   num_moves (INOUT): Current count of moves (incremented if added)
+    !   new_move (IN): The move to add
+    !
+    ! Side effects:
+    !   Prints warning if move list is full (should not happen in normal play)
     SUBROUTINE add_move(move_list, num_moves, new_move)
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(INOUT) :: num_moves
@@ -24,6 +33,31 @@ CONTAINS
             ! Handle error - maybe stop program or ignore move
         END IF
     END SUBROUTINE add_move
+
+    ! --- Helper to initialize a move ---
+    ! Creates a properly initialized Move_Type structure.
+    !
+    ! Parameters:
+    !   new_move (OUT): The move structure to initialize
+    !   from_sq (IN): Starting square
+    !   to_sq (IN): Ending square
+    !   promotion (IN): Promotion piece type (NO_PIECE if none)
+    !   captured (IN): Captured piece type (NO_PIECE if none)
+    !   castling (IN): True if this is a castling move
+    !   en_passant (IN): True if this is an en passant capture
+    SUBROUTINE init_move(new_move, from_sq, to_sq, promotion, captured, castling, en_passant)
+        TYPE(Move_Type), INTENT(OUT) :: new_move
+        TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq
+        INTEGER, INTENT(IN) :: promotion, captured
+        LOGICAL, INTENT(IN) :: castling, en_passant
+
+        new_move%from_sq = from_sq
+        new_move%to_sq = to_sq
+        new_move%promotion_piece = promotion
+        new_move%captured_piece = captured
+        new_move%is_castling = castling
+        new_move%is_en_passant = en_passant
+    END SUBROUTINE init_move
 
     ! --- Generate Pawn Moves ---
     SUBROUTINE generate_pawn_moves(board, from_sq, move_list, num_moves)
@@ -63,21 +97,11 @@ CONTAINS
                 to_sq = file_rank_to_sq(f, next_r)
                 IF (can_promote) THEN
                     DO i = 1, 4
-                         new_move%from_sq = from_sq
-                         new_move%to_sq = to_sq
-                         new_move%promotion_piece = promotion_options(i)
-                         new_move%captured_piece = NO_PIECE
-                         new_move%is_castling = .FALSE.
-                         new_move%is_en_passant = .FALSE.
+                         CALL init_move(new_move, from_sq, to_sq, promotion_options(i), NO_PIECE, .FALSE., .FALSE.)
                          CALL add_move(move_list, num_moves, new_move)
                     END DO
                 ELSE
-                     new_move%from_sq = from_sq
-                     new_move%to_sq = to_sq
-                     new_move%promotion_piece = NO_PIECE
-                     new_move%captured_piece = NO_PIECE
-                     new_move%is_castling = .FALSE.
-                     new_move%is_en_passant = .FALSE.
+                     CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .FALSE., .FALSE.)
                      CALL add_move(move_list, num_moves, new_move)
 
                      ! 2. Double Push (only if single push was possible)
@@ -86,12 +110,7 @@ CONTAINS
                           IF (sq_is_valid(dbl_r, f)) THEN
                                IF (board%squares_piece(dbl_r, f) == NO_PIECE) THEN
                                     to_sq = file_rank_to_sq(f, dbl_r)
-                                    new_move%from_sq = from_sq
-                                    new_move%to_sq = to_sq
-                                    new_move%promotion_piece = NO_PIECE
-                                    new_move%captured_piece = NO_PIECE
-                                    new_move%is_castling = .FALSE.
-                                    new_move%is_en_passant = .FALSE.
+                                    CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .FALSE., .FALSE.)
                                     CALL add_move(move_list, num_moves, new_move)
                                END IF
                           END IF
@@ -113,33 +132,18 @@ CONTAINS
                             can_promote = (next_r == promotion_rank)
                             IF (can_promote) THEN
                                  DO i = 1, 4
-                                     new_move%from_sq = from_sq
-                                     new_move%to_sq = to_sq
-                                     new_move%promotion_piece = promotion_options(i)
-                                     new_move%captured_piece = target_piece
-                                     new_move%is_castling = .FALSE.
-                                     new_move%is_en_passant = .FALSE.
+                                     CALL init_move(new_move, from_sq, to_sq, promotion_options(i), target_piece, .FALSE., .FALSE.)
                                      CALL add_move(move_list, num_moves, new_move)
                                  END DO
                             ELSE
-                                 new_move%from_sq = from_sq
-                                 new_move%to_sq = to_sq
-                                 new_move%promotion_piece = NO_PIECE
-                                 new_move%captured_piece = target_piece
-                                 new_move%is_castling = .FALSE.
-                                 new_move%is_en_passant = .FALSE.
+                                 CALL init_move(new_move, from_sq, to_sq, NO_PIECE, target_piece, .FALSE., .FALSE.)
                                  CALL add_move(move_list, num_moves, new_move)
                             END IF
                        ! En Passant Capture
                        ELSE IF (board%ep_target_present .AND. &
                                 next_r == board%ep_target_sq%rank .AND. &
                                 target_f == board%ep_target_sq%file) THEN
-                            new_move%from_sq = from_sq
-                            new_move%to_sq = board%ep_target_sq ! Move to EP target square
-                            new_move%promotion_piece = NO_PIECE
-                            new_move%captured_piece = PAWN ! EP always captures a pawn
-                            new_move%is_castling = .FALSE.
-                            new_move%is_en_passant = .TRUE.
+                            CALL init_move(new_move, from_sq, board%ep_target_sq, NO_PIECE, PAWN, .FALSE., .TRUE.)
                             CALL add_move(move_list, num_moves, new_move)
                        END IF
                   END IF
@@ -155,7 +159,7 @@ CONTAINS
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(INOUT) :: num_moves
 
-        INTEGER :: r, f, nr, nf, target_piece, target_color
+        INTEGER :: r, f, nr, nf, target_piece, target_color, dr, df
         INTEGER, DIMENSION(8,2) :: deltas
         TYPE(Square_Type) :: to_sq
         TYPE(Move_Type) :: new_move
@@ -164,14 +168,8 @@ CONTAINS
         r = from_sq%rank
         f = from_sq%file
 
-        deltas = RESHAPE((/ 2, 1, -1, -2, -2, -1, 1, 2, &
-             1, 2,  2,  1, -1, -2, -2, -1 /), (/8, 2/))
+        deltas = KNIGHT_DELTAS
         
-
-        new_move%from_sq = from_sq
-        new_move%promotion_piece = NO_PIECE
-        new_move%is_castling = .FALSE.
-        new_move%is_en_passant = .FALSE.
 
         DO i = 1, 8
             nr = r + deltas(i, 1)
@@ -180,13 +178,12 @@ CONTAINS
                 target_piece = board%squares_piece(nr, nf)
                 target_color = board%squares_color(nr, nf)
                 to_sq = file_rank_to_sq(nf, nr)
-                new_move%to_sq = to_sq
 
                 IF (target_piece == NO_PIECE) THEN ! Move to empty square
-                    new_move%captured_piece = NO_PIECE
+                    CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .FALSE., .FALSE.)
                     CALL add_move(move_list, num_moves, new_move)
                 ELSE IF (target_color /= board%current_player) THEN ! Capture
-                    new_move%captured_piece = target_piece
+                    CALL init_move(new_move, from_sq, to_sq, NO_PIECE, target_piece, .FALSE., .FALSE.)
                     CALL add_move(move_list, num_moves, new_move)
                 END IF
             END IF
@@ -211,11 +208,6 @@ CONTAINS
          r = from_sq%rank
          f = from_sq%file
 
-         new_move%from_sq = from_sq
-         new_move%promotion_piece = NO_PIECE
-         new_move%is_castling = .FALSE.
-         new_move%is_en_passant = .FALSE.
-
          DO i = 1, num_dirs
              dr = directions(i, 1)
              df = directions(i, 2)
@@ -225,14 +217,13 @@ CONTAINS
                  target_piece = board%squares_piece(nr, nf)
                  target_color = board%squares_color(nr, nf)
                  to_sq = file_rank_to_sq(nf, nr)
-                 new_move%to_sq = to_sq
 
                  IF (target_piece == NO_PIECE) THEN ! Move to empty square
-                     new_move%captured_piece = NO_PIECE
+                     CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .FALSE., .FALSE.)
                      CALL add_move(move_list, num_moves, new_move)
                  ELSE ! Hit a piece
                      IF (target_color /= board%current_player) THEN ! Capture
-                         new_move%captured_piece = target_piece
+                         CALL init_move(new_move, from_sq, to_sq, NO_PIECE, target_piece, .FALSE., .FALSE.)
                          CALL add_move(move_list, num_moves, new_move)
                      END IF
                      EXIT ! Stop searching this direction (path blocked)
@@ -262,13 +253,7 @@ CONTAINS
         f = from_sq%file
 
         ! 1. Normal Moves
-        deltas = RESHAPE((/  1,  0, -1,  0,  1,  1, -1, -1, &
-                          0,  1,  0, -1, 1, -1,  1, -1 /), (/8, 2/))
-
-        new_move%from_sq = from_sq
-        new_move%promotion_piece = NO_PIECE
-        new_move%is_castling = .FALSE.
-        new_move%is_en_passant = .FALSE.
+        deltas = KING_DELTAS
 
         DO i = 1, 8
             nr = r + deltas(i, 1)
@@ -277,13 +262,12 @@ CONTAINS
                 target_piece = board%squares_piece(nr, nf)
                 target_color = board%squares_color(nr, nf)
                 to_sq = file_rank_to_sq(nf, nr)
-                new_move%to_sq = to_sq
 
                 IF (target_piece == NO_PIECE) THEN ! Move to empty square
-                    new_move%captured_piece = NO_PIECE
+                    CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .FALSE., .FALSE.)
                     CALL add_move(move_list, num_moves, new_move)
                 ELSE IF (target_color /= board%current_player) THEN ! Capture
-                    new_move%captured_piece = target_piece
+                    CALL init_move(new_move, from_sq, to_sq, NO_PIECE, target_piece, .FALSE., .FALSE.)
                     CALL add_move(move_list, num_moves, new_move)
                 END IF
             END IF
@@ -309,12 +293,8 @@ CONTAINS
                  board%squares_piece(back_rank, 8) == ROOK .AND. & ! Check rook presence
                  board%squares_color(back_rank, 8) == board%current_player) THEN
 
-                 new_move%from_sq = from_sq
-                 new_move%to_sq = file_rank_to_sq(7, back_rank) ! King to g1/g8
-                 new_move%promotion_piece = NO_PIECE
-                 new_move%captured_piece = NO_PIECE
-                 new_move%is_castling = .TRUE.
-                 new_move%is_en_passant = .FALSE.
+                 to_sq = file_rank_to_sq(7, back_rank) ! King to g1/g8
+                 CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .TRUE., .FALSE.)
                  CALL add_move(move_list, num_moves, new_move)
              END IF
              ! Queenside
@@ -325,12 +305,8 @@ CONTAINS
                  board%squares_piece(back_rank, 1) == ROOK .AND. & ! Check rook presence
                  board%squares_color(back_rank, 1) == board%current_player) THEN
 
-                 new_move%from_sq = from_sq
-                 new_move%to_sq = file_rank_to_sq(3, back_rank) ! King to c1/c8
-                 new_move%promotion_piece = NO_PIECE
-                 new_move%captured_piece = NO_PIECE
-                 new_move%is_castling = .TRUE.
-                 new_move%is_en_passant = .FALSE.
+                 to_sq = file_rank_to_sq(3, back_rank) ! King to c1/c8
+                 CALL init_move(new_move, from_sq, to_sq, NO_PIECE, NO_PIECE, .TRUE., .FALSE.)
                  CALL add_move(move_list, num_moves, new_move)
              END IF
         END IF
@@ -344,44 +320,78 @@ CONTAINS
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list ! Array to store moves
         INTEGER, INTENT(OUT) :: num_moves           ! Count of moves generated
 
-        INTEGER :: r, f, piece, color
+        INTEGER :: i, piece
         TYPE(Square_Type) :: from_sq
-        ! Define directions for sliding pieces here
-        INTEGER, DIMENSION(4, 2) :: bishop_dirs = RESHAPE((/  1,  1,  -1, -1, -1,  1, 1, -1 /), (/4, 2/))
-        INTEGER, DIMENSION(4, 2) :: rook_dirs = RESHAPE((/  1,  0, -1,  0,  0,  1,  0, -1 /), (/4, 2/))
-        INTEGER, DIMENSION(8, 2) :: queen_dirs = RESHAPE((/ 1, -1,  0,  0,  1,  1, -1, -1, &
-                                                   0,  0,  1, -1, 1, -1,  1, -1 /), (/8, 2/))
 
         num_moves = 0 ! Reset count
 
-        DO r = 1, BOARD_SIZE
-            DO f = 1, BOARD_SIZE
-                piece = board%squares_piece(r, f)
-                color = board%squares_color(r, f)
-
-                IF (color == board%current_player) THEN
-                    from_sq = file_rank_to_sq(f, r)
-                    SELECT CASE (piece)
-                    CASE (PAWN)
-                        CALL generate_pawn_moves(board, from_sq, move_list, num_moves)
-                    CASE (KNIGHT)
-                        CALL generate_knight_moves(board, from_sq, move_list, num_moves)
-                    CASE (BISHOP)
-                        CALL generate_sliding_moves(board, from_sq, bishop_dirs, 4, move_list, num_moves)
-                    CASE (ROOK)
-                        CALL generate_sliding_moves(board, from_sq, rook_dirs, 4, move_list, num_moves)
-                    CASE (QUEEN)
-                        CALL generate_sliding_moves(board, from_sq, queen_dirs, 8, move_list, num_moves)
-                    CASE (KING)
-                        CALL generate_king_moves(board, from_sq, move_list, num_moves)
-                    END SELECT
-                END IF
+        ! Use piece lists for efficiency
+        IF (board%current_player == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                from_sq = board%white_pieces(i)
+                piece = board%squares_piece(from_sq%rank, from_sq%file)
+                SELECT CASE (piece)
+                CASE (PAWN)
+                    CALL generate_pawn_moves(board, from_sq, move_list, num_moves)
+                CASE (KNIGHT)
+                    CALL generate_knight_moves(board, from_sq, move_list, num_moves)
+                CASE (BISHOP)
+                    CALL generate_sliding_moves(board, from_sq, BISHOP_DIRS, 4, move_list, num_moves)
+                CASE (ROOK)
+                    CALL generate_sliding_moves(board, from_sq, ROOK_DIRS, 4, move_list, num_moves)
+                CASE (QUEEN)
+                    CALL generate_sliding_moves(board, from_sq, QUEEN_DIRS, 8, move_list, num_moves)
+                CASE (KING)
+                    CALL generate_king_moves(board, from_sq, move_list, num_moves)
+                END SELECT
             END DO
-        END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                from_sq = board%black_pieces(i)
+                piece = board%squares_piece(from_sq%rank, from_sq%file)
+                SELECT CASE (piece)
+                CASE (PAWN)
+                    CALL generate_pawn_moves(board, from_sq, move_list, num_moves)
+                CASE (KNIGHT)
+                    CALL generate_knight_moves(board, from_sq, move_list, num_moves)
+                CASE (BISHOP)
+                    CALL generate_sliding_moves(board, from_sq, BISHOP_DIRS, 4, move_list, num_moves)
+                CASE (ROOK)
+                    CALL generate_sliding_moves(board, from_sq, ROOK_DIRS, 4, move_list, num_moves)
+                CASE (QUEEN)
+                    CALL generate_sliding_moves(board, from_sq, QUEEN_DIRS, 8, move_list, num_moves)
+                CASE (KING)
+                    CALL generate_king_moves(board, from_sq, move_list, num_moves)
+                END SELECT
+            END DO
+        END IF
     END SUBROUTINE generate_pseudo_moves
 
 
     ! --- Generate Legal Moves (Filters Pseudo-Legal) ---
+    ! Generates all legal moves from the current position.
+    !
+    ! This function first generates all pseudo-legal moves (moves that appear legal
+    ! without considering check), then filters them by making each move and checking
+    ! if the king would be in check afterward.
+    !
+    ! Parameters:
+    !   board (INOUT): Current board state (modified during legality checking)
+    !   legal_move_list (OUT): Array to store legal moves
+    !   num_legal_moves (OUT): Number of legal moves found
+    !
+    ! Side effects:
+    !   Temporarily modifies board state during move validation
+    !   Board is restored to original state after checking each move
+    !
+    ! Algorithm:
+    !   1. Generate all pseudo-legal moves
+    !   2. For each pseudo-legal move:
+    !      a. Make the move on the board
+    !      b. Check if current player's king is in check
+    !      c. If not in check, add to legal move list
+    !      d. Unmake the move to restore board state
+    !   3. Special handling for castling (check squares king passes through)
     SUBROUTINE generate_moves(board, legal_move_list, num_legal_moves)
         USE make_unmake
         TYPE(Board_Type), INTENT(INOUT) :: board ! Needs INOUT for make/unmake
@@ -417,6 +427,7 @@ CONTAINS
                  ELSE ! Queenside (to_sq%file == 3)
                      mid_sq = file_rank_to_sq(4, king_sq%rank)
                  END IF
+                 ! King cannot castle if it passes through or ends on attacked square
                  IF (is_square_attacked(board, king_sq, opponent_color) .OR. &
                      is_square_attacked(board, mid_sq, opponent_color) .OR. &
                      is_square_attacked(board, current_move%to_sq, opponent_color)) THEN

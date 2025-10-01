@@ -12,6 +12,24 @@ MODULE Make_Unmake
 CONTAINS
 
     ! --- Make Move ---
+    ! Applies a move to the board, updating all necessary state.
+    !
+    ! This function handles all aspects of move execution:
+    ! - Piece movement and captures
+    ! - Special moves (castling, en passant, promotion)
+    ! - Castling rights updates
+    ! - En passant target updates
+    ! - Player turn switching
+    ! - Piece list maintenance
+    !
+    ! Parameters:
+    !   board (INOUT): Board state to modify
+    !   move (IN): Move to apply
+    !   unmake_info (OUT): Information needed to undo this move
+    !
+    ! Side effects:
+    !   Completely modifies board state
+    !   Updates piece lists for efficient iteration
     SUBROUTINE make_move(board, move, unmake_info)
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Move_Type), INTENT(IN) :: move
@@ -126,9 +144,34 @@ CONTAINS
         ! 5. Switch Player
         board%current_player = opponent_color
 
+        ! 6. Update piece lists
+        CALL update_piece_lists(board, from_sq, to_sq, unmake_info%captured_sq, &
+                               unmake_info%captured_piece_type, unmake_info%captured_piece_color, &
+                               move%promotion_piece)
+
     END SUBROUTINE make_move
 
     ! --- Unmake Move ---
+    ! Reverses a move that was previously applied with make_move.
+    !
+    ! This function restores the board to its exact state before the move was made,
+    ! using the information stored in unmake_info. It handles:
+    ! - Reversing piece movement and captures
+    ! - Restoring special move states (castling, en passant, promotion)
+    ! - Restoring castling rights
+    ! - Restoring en passant target
+    ! - Switching player turn back
+    ! - Restoring piece lists
+    !
+    ! Parameters:
+    !   board (INOUT): Board state to restore
+    !   move (IN): The move that was previously applied
+    !   unmake_info (IN): Information from make_move needed to undo
+    !
+    ! Side effects:
+    !   Completely restores board state to pre-move condition
+    !   Updates piece lists to match restored board state
+    !   Must be called immediately after make_move for the same move
     SUBROUTINE unmake_move(board, move, unmake_info)
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Move_Type), INTENT(IN) :: move
@@ -191,6 +234,11 @@ CONTAINS
              board%squares_piece(r_to, f_to) = unmake_info%captured_piece_type
              board%squares_color(r_to, f_to) = unmake_info%captured_piece_color
         END IF
+
+        ! Update piece lists for unmake
+        CALL update_piece_lists_unmake(board, move%from_sq, move%to_sq, unmake_info%captured_sq, &
+                                       unmake_info%captured_piece_type, unmake_info%captured_piece_color, &
+                                       move%promotion_piece)
 
     END SUBROUTINE unmake_move
 
