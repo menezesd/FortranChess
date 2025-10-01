@@ -9,17 +9,36 @@ MODULE Board_Utils
     PUBLIC :: init_board, print_board, get_opponent_color, &
               sq_is_valid, char_to_file, char_to_rank, &
               file_rank_to_sq, is_square_attacked, &
-              find_king, is_in_check
+              find_king, is_in_check, update_piece_lists, &
+              update_piece_lists_unmake
 
 CONTAINS
 
     ! --- Function to convert file char ('a'-'h') to index (1-8) ---
+    ! Converts algebraic chess notation file character to array index.
+    !
+    ! Parameters:
+    !   file_char (IN): Character 'a' through 'h'
+    !
+    ! Returns:
+    !   Integer 1-8 corresponding to file (a=1, b=2, ..., h=8)
+    !
+    ! Note: No error checking - assumes valid input
     INTEGER FUNCTION char_to_file(file_char)
         CHARACTER(LEN=1), INTENT(IN) :: file_char
         char_to_file = ICHAR(file_char) - ICHAR('a') + 1
     END FUNCTION char_to_file
 
     ! --- Function to convert rank char ('1'-'8') to index (1-8) ---
+    ! Converts algebraic chess notation rank character to array index.
+    !
+    ! Parameters:
+    !   rank_char (IN): Character '1' through '8'
+    !
+    ! Returns:
+    !   Integer 1-8 corresponding to rank (1=1, 2=2, ..., 8=8)
+    !
+    ! Note: Uses internal read for conversion, basic error handling via IOSTAT
     INTEGER FUNCTION char_to_rank(rank_char)
         CHARACTER(LEN=1), INTENT(IN) :: rank_char
         INTEGER :: ierr
@@ -28,6 +47,14 @@ CONTAINS
     END FUNCTION char_to_rank
 
     ! --- Subroutine to create a Square_Type ---
+    ! Creates a Square_Type structure from file and rank coordinates.
+    !
+    ! Parameters:
+    !   file (IN): File index (1-8)
+    !   rank (IN): Rank index (1-8)
+    !
+    ! Returns:
+    !   Square_Type structure with specified coordinates
     FUNCTION file_rank_to_sq(file, rank) RESULT(sq)
         INTEGER, INTENT(IN) :: file, rank
         TYPE(Square_Type)   :: sq
@@ -36,6 +63,14 @@ CONTAINS
     END FUNCTION file_rank_to_sq
 
     ! --- Function to check if square indices are valid (1-8) ---
+    ! Validates that file and rank coordinates are within chess board bounds.
+    !
+    ! Parameters:
+    !   rank (IN): Rank coordinate to check
+    !   file (IN): File coordinate to check
+    !
+    ! Returns:
+    !   True if coordinates are valid (1-8), false otherwise
     LOGICAL FUNCTION sq_is_valid(rank, file)
         INTEGER, INTENT(IN) :: rank, file
         sq_is_valid = (rank >= 1 .AND. rank <= BOARD_SIZE .AND. &
@@ -43,6 +78,13 @@ CONTAINS
     END FUNCTION sq_is_valid
 
     ! --- Get opponent color ---
+    ! Returns the opposite color of the given player color.
+    !
+    ! Parameters:
+    !   player_color (IN): WHITE or BLACK
+    !
+    ! Returns:
+    !   BLACK if input is WHITE, WHITE if input is BLACK, NO_COLOR for invalid input
     INTEGER FUNCTION get_opponent_color(player_color)
         INTEGER, INTENT(IN) :: player_color
         IF (player_color == WHITE) THEN
@@ -66,18 +108,33 @@ CONTAINS
         board%squares_piece = NO_PIECE
         board%squares_color = NO_COLOR
 
+        ! Initialize piece lists
+        board%num_white_pieces = 0
+        board%num_black_pieces = 0
+
         ! Place pieces
         DO f = 1, BOARD_SIZE
             ! White pieces
             board%squares_piece(1, f) = back_rank_pieces(f)
             board%squares_color(1, f) = WHITE
+            board%num_white_pieces = board%num_white_pieces + 1
+            board%white_pieces(board%num_white_pieces) = file_rank_to_sq(f, 1)
+            
             board%squares_piece(2, f) = PAWN
             board%squares_color(2, f) = WHITE
+            board%num_white_pieces = board%num_white_pieces + 1
+            board%white_pieces(board%num_white_pieces) = file_rank_to_sq(f, 2)
+            
             ! Black pieces
             board%squares_piece(8, f) = back_rank_pieces(f)
             board%squares_color(8, f) = BLACK
+            board%num_black_pieces = board%num_black_pieces + 1
+            board%black_pieces(board%num_black_pieces) = file_rank_to_sq(f, 8)
+            
             board%squares_piece(7, f) = PAWN
             board%squares_color(7, f) = BLACK
+            board%num_black_pieces = board%num_black_pieces + 1
+            board%black_pieces(board%num_black_pieces) = file_rank_to_sq(f, 7)
         END DO
 
         ! Set initial state
@@ -93,6 +150,17 @@ CONTAINS
     END SUBROUTINE init_board
 
     ! --- Print Board to Console ---
+    ! Displays the current board state in a human-readable format.
+    !
+    ! Shows the chess board with algebraic notation coordinates, piece symbols,
+    ! and current player turn. White pieces are uppercase, black pieces lowercase.
+    !
+    ! Parameters:
+    !   board (IN): Board state to display
+    !
+    ! Side effects:
+    !   Prints board representation to console
+    !   Shows current player turn
     SUBROUTINE print_board(board)
         TYPE(Board_Type), INTENT(IN) :: board
         INTEGER :: r, f
@@ -139,6 +207,19 @@ CONTAINS
 
 
     ! --- Find King of a given color ---
+    ! Locates the king of the specified color on the board.
+    !
+    ! Searches the entire board to find the king piece of the given color.
+    ! Used for check detection and castling validation.
+    !
+    ! Parameters:
+    !   board (IN): Current board state
+    !   king_color (IN): Color of king to find (WHITE or BLACK)
+    !
+    ! Returns:
+    !   Square_Type with king's position, or (0,0) if not found
+    !
+    ! Note: In a valid chess position, exactly one king of each color should exist
     FUNCTION find_king(board, king_color) RESULT(king_sq)
 
         TYPE(Board_Type), INTENT(IN) :: board
@@ -164,6 +245,24 @@ CONTAINS
     END FUNCTION find_king
 
     LOGICAL FUNCTION is_square_attacked(board, target_sq, attacker_color)
+        ! Checks if a square is attacked by pieces of the specified color.
+        !
+        ! This function determines if any piece of the attacker_color can move to
+        ! or capture on the target square. Used for check detection and castling validation.
+        !
+        ! Parameters:
+        !   board (IN): Current board state
+        !   target_sq (IN): Square to check for attacks
+        !   attacker_color (IN): Color of pieces that might be attacking
+        !
+        ! Returns:
+        !   True if the square is attacked by any piece of attacker_color
+        !
+        ! Algorithm checks:
+        !   1. Pawn attacks (diagonal captures)
+        !   2. Knight attacks (L-shaped moves)
+        !   3. King attacks (adjacent squares)
+        !   4. Sliding piece attacks (rook, bishop, queen along rays)
         TYPE(Board_Type), INTENT(IN) :: board
         TYPE(Square_Type), INTENT(IN) :: target_sq
         INTEGER, INTENT(IN)           :: attacker_color
@@ -194,9 +293,7 @@ CONTAINS
             END IF
         END DO
 
-        knight_deltas = RESHAPE((/ 2, 1, -1, -2, -2, -1, 1, 2, &
-                          1, 2,  2,  1, -1, -2, -2, -1 /), (/8, 2/))
-
+        knight_deltas = KNIGHT_DELTAS
         DO i = 1, 8
              dr = knight_deltas(i, 1)
              df = knight_deltas(i, 2)
@@ -212,9 +309,7 @@ CONTAINS
         END DO
 
         ! 3. Check King attacks
-        king_deltas = RESHAPE((/  1,  0, -1,  0,  1,  1, -1, -1, &
-                          0,  1,  0, -1, 1, -1,  1, -1 /), (/8, 2/))
-
+        king_deltas = KING_DELTAS
         DO i = 1, 8
              dr = king_deltas(i, 1)
              df = king_deltas(i, 2)
@@ -284,5 +379,151 @@ CONTAINS
 
     END FUNCTION is_in_check
 
+
+    ! --- Update piece lists after a move ---
+    ! Maintains piece position lists after a move is applied.
+    !
+    ! This function updates the white_pieces and black_pieces arrays to reflect
+    ! the new positions after a move. It handles:
+    ! - Removing captured pieces from opponent's list
+    ! - Updating the moving piece's position
+    ! - Handling promotions (piece type changes but position stays the same)
+    !
+    ! Parameters:
+    !   board (INOUT): Board state with piece lists to update
+    !   from_sq (IN): Square the piece moved from
+    !   to_sq (IN): Square the piece moved to
+    !   captured_sq (IN): Square where capture occurred (if any)
+    !   captured_piece (IN): Type of piece captured (NO_PIECE if none)
+    !   captured_color (IN): Color of piece captured
+    !   promotion_piece (IN): New piece type if promotion occurred
+    !
+    ! Side effects:
+    !   Modifies piece list arrays and counts
+    !   Assumes board squares have already been updated
+    SUBROUTINE update_piece_lists(board, from_sq, to_sq, captured_sq, captured_piece, captured_color, promotion_piece)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq
+        TYPE(Square_Type), INTENT(IN) :: captured_sq
+        INTEGER, INTENT(IN) :: captured_piece, captured_color, promotion_piece
+
+        INTEGER :: i, piece_moved, color_moved
+        LOGICAL :: found
+
+        piece_moved = board%squares_piece(from_sq%rank, from_sq%file)
+        color_moved = board%squares_color(from_sq%rank, from_sq%file)
+
+        ! Remove captured piece from opponent's list if any
+        IF (captured_piece /= NO_PIECE) THEN
+            IF (captured_color == WHITE) THEN
+                found = .FALSE.
+                DO i = 1, board%num_white_pieces
+                    IF (board%white_pieces(i)%rank == captured_sq%rank .AND. &
+                        board%white_pieces(i)%file == captured_sq%file) THEN
+                        board%white_pieces(i) = board%white_pieces(board%num_white_pieces)
+                        board%num_white_pieces = board%num_white_pieces - 1
+                        found = .TRUE.
+                        EXIT
+                    END IF
+                END DO
+            ELSE
+                found = .FALSE.
+                DO i = 1, board%num_black_pieces
+                    IF (board%black_pieces(i)%rank == captured_sq%rank .AND. &
+                        board%black_pieces(i)%file == captured_sq%file) THEN
+                        board%black_pieces(i) = board%black_pieces(board%num_black_pieces)
+                        board%num_black_pieces = board%num_black_pieces - 1
+                        found = .TRUE.
+                        EXIT
+                    END IF
+                END DO
+            END IF
+        END IF
+
+        ! Update moving piece's position
+        IF (color_moved == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                IF (board%white_pieces(i)%rank == from_sq%rank .AND. &
+                    board%white_pieces(i)%file == from_sq%file) THEN
+                    board%white_pieces(i) = to_sq
+                    EXIT
+                END IF
+            END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                IF (board%black_pieces(i)%rank == from_sq%rank .AND. &
+                    board%black_pieces(i)%file == from_sq%file) THEN
+                    board%black_pieces(i) = to_sq
+                    EXIT
+                END IF
+            END DO
+        END IF
+
+        ! Handle promotion (pawn becomes another piece)
+        IF (promotion_piece /= NO_PIECE) THEN
+            ! Piece type already updated in board, list position is correct
+        END IF
+
+    END SUBROUTINE update_piece_lists
+
+    ! --- Update piece lists for unmake ---
+    ! Restores piece position lists when a move is undone.
+    !
+    ! This function reverses the changes made by update_piece_lists, restoring
+    ! the piece lists to their state before the move was applied. It handles:
+    ! - Moving the piece back to its original position
+    ! - Restoring captured pieces to their lists
+    ! - Handling promotions (piece type changes back)
+    !
+    ! Parameters:
+    !   board (INOUT): Board state with piece lists to restore
+    !   from_sq (IN): Square the piece originally moved from
+    !   to_sq (IN): Square the piece moved to (now current position)
+    !   captured_sq (IN): Square where capture occurred (if any)
+    !   captured_piece (IN): Type of piece that was captured
+    !   captured_color (IN): Color of piece that was captured
+    !   promotion_piece (IN): Piece type if promotion occurred (for unpromotion)
+    !
+    ! Side effects:
+    !   Modifies piece list arrays and counts to pre-move state
+    !   Assumes board squares have already been restored
+    SUBROUTINE update_piece_lists_unmake(board, from_sq, to_sq, captured_sq, captured_piece, captured_color, promotion_piece)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq, captured_sq
+        INTEGER, INTENT(IN) :: captured_piece, captured_color, promotion_piece
+
+        INTEGER :: i
+
+        ! Move piece back to from_sq
+        IF (board%current_player == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                IF (board%white_pieces(i)%rank == to_sq%rank .AND. &
+                    board%white_pieces(i)%file == to_sq%file) THEN
+                    board%white_pieces(i) = from_sq
+                    EXIT
+                END IF
+            END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                IF (board%black_pieces(i)%rank == to_sq%rank .AND. &
+                    board%black_pieces(i)%file == to_sq%file) THEN
+                    board%black_pieces(i) = from_sq
+                    EXIT
+                END IF
+            END DO
+        END IF
+
+        ! Restore captured piece if any
+        IF (captured_piece /= NO_PIECE) THEN
+            IF (captured_color == WHITE) THEN
+                board%num_white_pieces = board%num_white_pieces + 1
+                board%white_pieces(board%num_white_pieces) = captured_sq
+            ELSE
+                board%num_black_pieces = board%num_black_pieces + 1
+                board%black_pieces(board%num_black_pieces) = captured_sq
+            END IF
+        END IF
+
+    END SUBROUTINE update_piece_lists_unmake
 
 END MODULE Board_Utils

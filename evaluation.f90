@@ -1,6 +1,6 @@
 ! ============================================
 ! Module: Evaluation
-! Purpose: Static board evaluation
+! Purpose: Static board evaluation using material and piece-square tables
 ! ============================================
 MODULE Evaluation
     USE Chess_Types
@@ -8,6 +8,10 @@ MODULE Evaluation
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: evaluate_board
+
+    ! Piece-Square Tables (PSTs) for positional evaluation
+    ! These tables assign bonus/penalty values to pieces based on their position
+    ! Higher values encourage centralization, development, and king safety
 
 
 INTEGER, PARAMETER, DIMENSION(8, 8) :: PAWN_PST = RESHAPE( &
@@ -81,58 +85,81 @@ INTEGER, PARAMETER, DIMENSION(8, 8) :: KING_PST = RESHAPE( &
 
 CONTAINS
     ! --- Evaluate Board ---
+    ! Performs static evaluation of the current board position.
+    !
+    ! Evaluation combines material balance with positional factors:
+    ! - Material: Piece values (pawn=100, knight=320, etc.)
+    ! - Position: Piece-square table bonuses/penalties
+    !
+    ! The evaluation is calculated as: white_score - black_score
+    ! Positive scores favor white, negative favor black.
+    !
+    ! Parameters:
+    !   board (IN): Current board state to evaluate
+    !
+    ! Returns:
+    !   Evaluation score in centipawns (positive = white advantage)
+    !
+    ! Notes:
+    !   - Uses piece lists for efficient iteration
+    !   - PSTs are flipped for black pieces (rank 8 becomes rank 1)
+    !   - King value is high to ensure mate detection
     INTEGER FUNCTION evaluate_board(board)
         TYPE(Board_Type), INTENT(IN) :: board
-        INTEGER :: score, r, f, piece, color, eval_rank, piece_value, pst_value
+        INTEGER :: score, i, r, f, piece, eval_rank, piece_value, pst_value
+        TYPE(Square_Type) :: sq
 
-        score = 0
-        DO r = 1, BOARD_SIZE
-            DO f = 1, BOARD_SIZE
-                piece = board%squares_piece(r, f)
-                color = board%squares_color(r, f)
-                IF (piece /= NO_PIECE) THEN
-                    ! Material value
-                    SELECT CASE(piece)
-                    CASE(PAWN)   ; piece_value = PAWN_VAL
-                    CASE(KNIGHT) ; piece_value = KNIGHT_VAL
-                    CASE(BISHOP) ; piece_value = BISHOP_VAL
-                    CASE(ROOK)   ; piece_value = ROOK_VAL
-                    CASE(QUEEN)  ; piece_value = QUEEN_VAL
-                    CASE(KING)   ; piece_value = KING_VAL
-                    END SELECT
+        ! Initialize score
+        evaluate_board = 0
 
-                    ! Piece Square Table value (needs full tables defined)
-                    IF (color == WHITE) THEN
-                         eval_rank = r
-                    ELSE
-                         eval_rank = BOARD_SIZE - r + 1 ! Flip rank for black
-                    END IF
+        ! Evaluate white pieces using piece list
+        DO i = 1, board%num_white_pieces
+            sq = board%white_pieces(i)
+            r = sq%rank
+            f = sq%file
+            piece = board%squares_piece(r, f)
+            eval_rank = r  ! White: rank 1-8 as-is
 
-                    SELECT CASE(piece)
-                    CASE(PAWN)   ; pst_value = PAWN_PST(eval_rank, f)
-                    CASE(KNIGHT) ; pst_value = KNIGHT_PST(eval_rank, f)
-                    CASE(BISHOP) ; pst_value = BISHOP_PST(eval_rank, f)
-                    CASE(ROOK)   ; pst_value = ROOK_PST(eval_rank, f)
-                    CASE(QUEEN)  ; pst_value = QUEEN_PST(eval_rank, f)
-                    CASE(KING)   ; pst_value = KING_PST(eval_rank, f)
-                    ! Add cases for other pieces using their PSTs
-                    CASE DEFAULT ; pst_value = 0
-                    END SELECT
+            ! Get material value and positional bonus
+            SELECT CASE(piece)
+            CASE(PAWN)   ; piece_value = PAWN_VAL;   pst_value = PAWN_PST(eval_rank, f)
+            CASE(KNIGHT) ; piece_value = KNIGHT_VAL; pst_value = KNIGHT_PST(eval_rank, f)
+            CASE(BISHOP) ; piece_value = BISHOP_VAL; pst_value = BISHOP_PST(eval_rank, f)
+            CASE(ROOK)   ; piece_value = ROOK_VAL;   pst_value = ROOK_PST(eval_rank, f)
+            CASE(QUEEN)  ; piece_value = QUEEN_VAL;  pst_value = QUEEN_PST(eval_rank, f)
+            CASE(KING)   ; piece_value = KING_VAL;   pst_value = KING_PST(eval_rank, f)
+            CASE DEFAULT ; piece_value = 0; pst_value = 0
+            END SELECT
 
-                    IF (color == WHITE) THEN
-                        score = score + piece_value + pst_value
-                    ELSE
-                        score = score - (piece_value + pst_value)
-                    END IF
-                END IF
-            END DO
+            evaluate_board = evaluate_board + piece_value + pst_value
         END DO
 
-        ! Return score relative to current player
-        IF (board%current_player == WHITE) THEN
-            evaluate_board = score
-        ELSE
-            evaluate_board = -score
+        ! Evaluate black pieces using piece list
+        DO i = 1, board%num_black_pieces
+            sq = board%black_pieces(i)
+            r = sq%rank
+            f = sq%file
+            piece = board%squares_piece(r, f)
+            eval_rank = BOARD_SIZE - r + 1  ! Black: flip ranks (8->1, 1->8)
+
+            ! Get material value and positional bonus
+            SELECT CASE(piece)
+            CASE(PAWN)   ; piece_value = PAWN_VAL;   pst_value = PAWN_PST(eval_rank, f)
+            CASE(KNIGHT) ; piece_value = KNIGHT_VAL; pst_value = KNIGHT_PST(eval_rank, f)
+            CASE(BISHOP) ; piece_value = BISHOP_VAL; pst_value = BISHOP_PST(eval_rank, f)
+            CASE(ROOK)   ; piece_value = ROOK_VAL;   pst_value = ROOK_PST(eval_rank, f)
+            CASE(QUEEN)  ; piece_value = QUEEN_VAL;  pst_value = QUEEN_PST(eval_rank, f)
+            CASE(KING)   ; piece_value = KING_VAL;   pst_value = KING_PST(eval_rank, f)
+            CASE DEFAULT ; piece_value = 0; pst_value = 0
+            END SELECT
+
+            evaluate_board = evaluate_board - (piece_value + pst_value)
+        END DO
+
+        ! Adjust score relative to current player
+        ! (positive = current player advantage, negative = opponent advantage)
+        IF (board%current_player == BLACK) THEN
+            evaluate_board = -evaluate_board
         END IF
 
     END FUNCTION evaluate_board
