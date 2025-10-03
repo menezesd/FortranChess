@@ -100,6 +100,11 @@ CONTAINS
         LOGICAL :: in_check
         TYPE(TT_Entry_Type) :: tt_entry
         LOGICAL :: tt_hit
+        ! NMP constants and state
+        INTEGER, PARAMETER :: NMP_R = 3 ! Depth reduction factor
+        LOGICAL :: prev_ep_present
+        TYPE(Square_Type) :: prev_ep_sq
+        INTEGER(KIND=8) :: prev_key
 
         current_alpha = alpha ! Local copy to modify
 
@@ -116,12 +121,48 @@ CONTAINS
             RETURN
         END IF
 
+        in_check = is_in_check(board, board%current_player)
+
+        ! --- Null Move Pruning (NMP) ---
+        ! If not in check, and we have enough material, and depth is sufficient,
+        ! try giving a free move to the opponent. If the score is still high
+        ! enough to cause a beta cutoff, we can prune this whole branch.
+        IF (.NOT. in_check .AND. depth >= NMP_R + 1 .AND. board%num_white_pieces + board%num_black_pieces > 6) THEN
+            ! Make a null move
+            prev_key = board%zobrist_key
+            prev_ep_present = board%ep_target_present
+            prev_ep_sq = board%ep_target_sq
+
+            board%current_player = get_opponent_color(board%current_player)
+            board%zobrist_key = IEOR(board%zobrist_key, ZOBRIST_BLACK_TO_MOVE)
+            IF (board%ep_target_present) THEN
+                board%zobrist_key = IEOR(board%zobrist_key, ZOBRIST_EP_FILE(board%ep_target_sq%file))
+                board%ep_target_present = .FALSE.
+            END IF
+
+            ! Search with reduced depth and a null window
+            next_beta = -beta
+            next_alpha = -beta + 1
+            score = -negamax(board, depth - 1 - NMP_R, next_beta, next_alpha)
+
+            ! Unmake the null move
+            board%current_player = get_opponent_color(board%current_player)
+            board%ep_target_present = prev_ep_present
+            board%ep_target_sq = prev_ep_sq
+            board%zobrist_key = prev_key
+
+            ! If the null move search causes a beta cutoff, we can prune this node
+            IF (score >= beta) THEN
+                best_score = beta
+                RETURN
+            END IF
+        END IF
+
         ! Generate all legal moves for current position
         CALL generate_moves(board, moves, num_moves)
 
-        ! Check for terminal positions (checkmate/stalemate)
+        ! Check for terminal positions (checkmate/stalemate) after move generation
         IF (num_moves == 0) THEN
-             in_check = is_in_check(board, board%current_player)
              IF (in_check) THEN
                  ! Checkmate: current player loses, score decreases with depth
                  ! (prefer faster mates)
