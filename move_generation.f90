@@ -7,7 +7,7 @@ MODULE Move_Generation
     USE Board_Utils
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: generate_moves ! Main function exposed
+    PUBLIC :: generate_moves, generate_pseudo_moves, generate_captures, order_moves ! Main function exposed
 
 CONTAINS
 
@@ -58,6 +58,23 @@ CONTAINS
         new_move%is_castling = castling
         new_move%is_en_passant = en_passant
     END SUBROUTINE init_move
+
+    SUBROUTINE generate_captures(board, move_list, num_moves)
+        TYPE(Board_Type), INTENT(IN) :: board
+        TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
+        INTEGER, INTENT(OUT) :: num_moves
+        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: pseudo_moves
+        INTEGER :: num_pseudo_moves, i
+
+        num_moves = 0
+        CALL generate_pseudo_moves(board, pseudo_moves, num_pseudo_moves)
+
+        DO i = 1, num_pseudo_moves
+            IF (pseudo_moves(i)%captured_piece /= NO_PIECE) THEN
+                CALL add_move(move_list, num_moves, pseudo_moves(i))
+            END IF
+        END DO
+    END SUBROUTINE generate_captures
 
     ! --- Generate Pawn Moves ---
     SUBROUTINE generate_pawn_moves(board, from_sq, move_list, num_moves)
@@ -449,4 +466,48 @@ CONTAINS
     END SUBROUTINE generate_moves
 
 
+    SUBROUTINE order_moves(board, move_list, num_moves)
+        TYPE(Board_Type), INTENT(IN) :: board
+        TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
+        INTEGER, INTENT(IN) :: num_moves
+        INTEGER :: i, j
+        TYPE(Move_Type) :: temp_move
+        INTEGER, DIMENSION(num_moves) :: scores
+        INTEGER :: piece_val, captured_val
+
+        DO i = 1, num_moves
+            scores(i) = 0
+            IF (move_list(i)%captured_piece /= NO_PIECE) THEN
+                SELECT CASE (board%squares_piece(move_list(i)%from_sq%rank, move_list(i)%from_sq%file))
+                    CASE(PAWN); piece_val = 1
+                    CASE(KNIGHT); piece_val = 2
+                    CASE(BISHOP); piece_val = 3
+                    CASE(ROOK); piece_val = 4
+                    CASE(QUEEN); piece_val = 5
+                    CASE(KING); piece_val = 6
+                    CASE DEFAULT; piece_val = 0
+                END SELECT
+                SELECT CASE (move_list(i)%captured_piece)
+                    CASE(PAWN); captured_val = 10
+                    CASE(KNIGHT); captured_val = 20
+                    CASE(BISHOP); captured_val = 30
+                    CASE(ROOK); captured_val = 40
+                    CASE(QUEEN); captured_val = 50
+                    CASE(KING); captured_val = 60
+                    CASE DEFAULT; captured_val = 0
+                END SELECT
+                scores(i) = captured_val - piece_val
+            END IF
+        END DO
+
+        DO i = 1, num_moves - 1
+            DO j = i + 1, num_moves
+                IF (scores(i) < scores(j)) THEN
+                    temp_move = move_list(i)
+                    move_list(i) = move_list(j)
+                    move_list(j) = temp_move
+                END IF
+            END DO
+        END DO
+    END SUBROUTINE order_moves
   END MODULE Move_Generation
