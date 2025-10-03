@@ -106,7 +106,7 @@ CONTAINS
     !   - King value is high to ensure mate detection
     INTEGER FUNCTION evaluate_board(board)
         TYPE(Board_Type), INTENT(IN) :: board
-        INTEGER :: score, i, r, f, piece, eval_rank, piece_value, pst_value
+        INTEGER :: i, r, f, piece, eval_rank, piece_value, pst_value
         TYPE(Square_Type) :: sq
 
         ! Initialize score

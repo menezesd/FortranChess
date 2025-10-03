@@ -8,6 +8,7 @@ MODULE Search
     USE Move_Generation
     USE Make_Unmake
     USE Evaluation
+    USE Transposition_Table
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: find_best_move
@@ -89,15 +90,25 @@ CONTAINS
     !   Temporarily modifies the board during recursive search (restored via make/unmake)
     RECURSIVE INTEGER FUNCTION negamax(board, depth, alpha, beta) RESULT(best_score)
         TYPE(Board_Type), INTENT(INOUT) :: board ! Needs INOUT for make/unmake
-        INTEGER, INTENT(IN) :: depth, alpha, beta
-        INTEGER :: score, current_alpha
+        INTEGER, INTENT(IN) :: depth
+        INTEGER, INTENT(INOUT) :: alpha, beta ! alpha and beta are modified by TT lookups
+        INTEGER :: score, current_alpha, next_alpha, next_beta
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves, i
-        TYPE(Move_Type) :: current_move
+        TYPE(Move_Type) :: current_move, best_move_here
         TYPE(UnmakeInfo_Type) :: unmake_info
         LOGICAL :: in_check
+        TYPE(TT_Entry_Type) :: tt_entry
+        LOGICAL :: tt_hit
 
         current_alpha = alpha ! Local copy to modify
+
+        ! --- Transposition Table Lookup ---
+        tt_hit = probe_tt(board%zobrist_key, depth, alpha, beta, tt_entry)
+        IF (tt_hit) THEN
+            best_score = tt_entry%score
+            RETURN
+        END IF
 
         ! Base case: evaluate position when search depth is reached
         IF (depth <= 0) THEN
@@ -124,6 +135,7 @@ CONTAINS
 
         ! Initialize best score to worst possible outcome
         best_score = -INF
+        best_move_here%from_sq%rank = 0 ! Null move
 
         ! Evaluate each possible move
         DO i = 1, num_moves
@@ -134,7 +146,9 @@ CONTAINS
 
             ! Recursively search from opponent's perspective
             ! Negate score because we're switching perspectives
-            score = -negamax(board, depth - 1, -beta, -current_alpha)
+            next_beta = -beta
+            next_alpha = -current_alpha
+            score = -negamax(board, depth - 1, next_beta, next_alpha)
 
             ! Undo the move to restore board state
             CALL unmake_move(board, current_move, unmake_info)
@@ -142,6 +156,7 @@ CONTAINS
             ! Update best score found so far
             IF (score > best_score) THEN
                  best_score = score
+                 best_move_here = current_move
             END IF
 
             ! Update alpha (best score current player can guarantee)
@@ -152,9 +167,20 @@ CONTAINS
             ! Alpha-beta pruning: if current best score is better than
             ! what opponent can force, stop searching this branch
             IF (current_alpha >= beta) THEN
+                 CALL store_tt_entry(board%zobrist_key, depth, beta, HASH_FLAG_BETA, moves(i))
                  EXIT ! Prune remaining moves
             END IF
         END DO
+
+        ! --- Store result in Transposition Table ---
+        IF (best_move_here%from_sq%rank /= 0) THEN
+            IF (best_score <= alpha) THEN ! Upper bound
+                CALL store_tt_entry(board%zobrist_key, depth, best_score, HASH_FLAG_ALPHA, best_move_here)
+            ELSE ! Exact score
+                CALL store_tt_entry(board%zobrist_key, depth, best_score, HASH_FLAG_EXACT, best_move_here)
+            END IF
+        END IF
+
 
     END FUNCTION negamax
 
@@ -182,7 +208,7 @@ CONTAINS
 
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves, i, d
-        INTEGER :: score, best_score_so_far, alpha, beta
+        INTEGER :: score, best_score_so_far, alpha, beta, next_alpha, next_beta
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
 
@@ -211,7 +237,9 @@ CONTAINS
                 CALL make_move(board, current_move, unmake_info)
 
                 ! Search from opponent's perspective
-                score = -negamax(board, d - 1, -beta, -alpha)
+                next_beta = -beta
+                next_alpha = -alpha
+                score = -negamax(board, d - 1, next_beta, next_alpha)
 
                 ! Undo the move
                 CALL unmake_move(board, current_move, unmake_info)
