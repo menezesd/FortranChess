@@ -4,6 +4,7 @@
 ! ============================================
 MODULE Board_Utils
     USE Chess_Types
+    USE Transposition_Table, ONLY: ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE, compute_zobrist_hash
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: init_board, print_board, get_opponent_color, &
@@ -147,6 +148,9 @@ CONTAINS
         board%bc_k = .TRUE.
         board%bc_q = .TRUE.
 
+        ! Compute initial Zobrist key
+        board%zobrist_key = compute_zobrist_hash(board)
+
     END SUBROUTINE init_board
 
     ! --- Print Board to Console ---
@@ -252,46 +256,17 @@ CONTAINS
 
     END FUNCTION find_king
 
-    LOGICAL FUNCTION is_square_attacked(board, target_sq, attacker_color)
-        ! Checks if a square is attacked by pieces of the specified color.
-        !
-        ! This function determines if any piece of the attacker_color can move to
-        ! or capture on the target square. Used for check detection and castling validation.
-        !
-        ! Parameters:
-        !   board (IN): Current board state
-        !   target_sq (IN): Square to check for attacks
-        !   attacker_color (IN): Color of pieces that might be attacking
-        !
-        ! Returns:
-        !   True if the square is attacked by any piece of attacker_color
-        !
-        ! Algorithm checks:
-        !   1. Pawn attacks (diagonal captures)
-        !   2. Knight attacks (L-shaped moves)
-        !   3. King attacks (adjacent squares)
-        !   4. Sliding piece attacks (rook, bishop, queen along rays)
-        TYPE(Board_Type), INTENT(IN) :: board
+    LOGICAL FUNCTION is_square_attacked(board, target_sq, attacker_color) RESULT(is_attacked)
+        TYPE(Board_Type), INTENT(IN)  :: board
         TYPE(Square_Type), INTENT(IN) :: target_sq
         INTEGER, INTENT(IN)           :: attacker_color
 
         INTEGER :: i, tr, tf, r, f, piece, color, dir, df, dr
-        INTEGER, DIMENSION(8,2) :: knight_deltas, king_deltas, sliding_deltas
         LOGICAL :: is_diagonal
 
-        is_square_attacked = .FALSE. ! Assume not attacked initially
+        is_attacked = .FALSE. ! Assume not attacked initially
         tr = target_sq%rank
         tf = target_sq%file
-
-        ! Initialize deltas from parameters
-        knight_deltas = KNIGHT_DELTAS
-        king_deltas = KING_DELTAS
-        sliding_deltas = QUEEN_DIRS
-
-        ! Initialize deltas
-        knight_deltas = KNIGHT_DELTAS
-        king_deltas = KING_DELTAS
-        sliding_deltas = QUEEN_DIRS
 
         ! 1. Check Pawn attacks
         IF (attacker_color == WHITE) THEN
@@ -305,73 +280,67 @@ CONTAINS
             IF (sq_is_valid(r, f)) THEN
                 IF (board%squares_piece(r, f) == PAWN .AND. &
                     board%squares_color(r, f) == attacker_color) THEN
-                    is_square_attacked = .TRUE.
+                    is_attacked = .TRUE.
                     RETURN
                 END IF
             END IF
         END DO
 
-        knight_deltas = KNIGHT_DELTAS
+        ! 2. Check Knight attacks
         DO i = 1, 8
-             dr = knight_deltas(i, 1)
-             df = knight_deltas(i, 2)
+             dr = KNIGHT_DELTAS(i, 1)
+             df = KNIGHT_DELTAS(i, 2)
              r = tr + dr
              f = tf + df
              IF (sq_is_valid(r,f)) THEN
                   IF (board%squares_piece(r,f) == KNIGHT .AND. &
                       board%squares_color(r,f) == attacker_color) THEN
-                      is_square_attacked = .TRUE.
+                      is_attacked = .TRUE.
                       RETURN
                   END IF
              END IF
         END DO
 
         ! 3. Check King attacks
-        king_deltas = KING_DELTAS
         DO i = 1, 8
-             dr = king_deltas(i, 1)
-             df = king_deltas(i, 2)
+             dr = KING_DELTAS(i, 1)
+             df = KING_DELTAS(i, 2)
              r = tr + dr
              f = tf + df
              IF (sq_is_valid(r,f)) THEN
                   IF (board%squares_piece(r,f) == KING .AND. &
                       board%squares_color(r,f) == attacker_color) THEN
-                      is_square_attacked = .TRUE.
+                      is_attacked = .TRUE.
                       RETURN
                   END IF
              END IF
         END DO
 
         ! 4. Check Sliding attacks (Rook, Bishop, Queen)
-        sliding_deltas = RESHAPE((/ 1, -1, 0,  0,  1,  1, -1, -1, &
-                           0,  0, 1, -1,  1, -1,  1, -1 /), (/8, 2/))
-
         DO i = 1, 8
-            dr = sliding_deltas(i, 1)
-            df = sliding_deltas(i, 2)
-            is_diagonal = (i > 4)
+            dr = QUEEN_DIRS(i, 1)
+            df = QUEEN_DIRS(i, 2)
+            is_diagonal = (dr /= 0 .AND. df /= 0)
+
             r = tr + dr
             f = tf + df
             DO WHILE (sq_is_valid(r, f))
                 piece = board%squares_piece(r,f)
                 color = board%squares_color(r,f)
-                IF (piece /= NO_PIECE) THEN ! Found a piece
+                IF (piece /= NO_PIECE) THEN
                     IF (color == attacker_color) THEN
-                        SELECT CASE(piece)
-                        CASE(QUEEN)
-                            is_square_attacked = .TRUE.; RETURN
-                        CASE(ROOK)
-                            IF (.NOT. is_diagonal) THEN
-                                is_square_attacked = .TRUE.; RETURN
-                            END IF
-                        CASE(BISHOP)
-                            IF (is_diagonal) THEN
-                                is_square_attacked = .TRUE.; RETURN
-                            END IF
-                        END SELECT
+                        ! Check for Queen, or Rook on straight, or Bishop on diagonal
+                        IF (piece == QUEEN .OR. &
+                           (piece == ROOK .AND. .NOT. is_diagonal) .OR. &
+                           (piece == BISHOP .AND. is_diagonal)) THEN
+                            is_attacked = .TRUE.
+                            RETURN
+                        END IF
                     END IF
-                    EXIT ! Path blocked, stop searching this direction
+                    ! An intervening piece blocks further attacks along this line
+                    EXIT
                 END IF
+
                 r = r + dr
                 f = f + df
             END DO
@@ -503,15 +472,14 @@ CONTAINS
     !   captured_sq (IN): Square where capture occurred (if any)
     !   captured_piece (IN): Type of piece that was captured
     !   captured_color (IN): Color of piece that was captured
-    !   promotion_piece (IN): Piece type if promotion occurred (for unpromotion)
     !
     ! Side effects:
     !   Modifies piece list arrays and counts to pre-move state
     !   Assumes board squares have already been restored
-    SUBROUTINE update_piece_lists_unmake(board, from_sq, to_sq, captured_sq, captured_piece, captured_color, promotion_piece)
+    SUBROUTINE update_piece_lists_unmake(board, from_sq, to_sq, captured_sq, captured_piece, captured_color)
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq, captured_sq
-        INTEGER, INTENT(IN) :: captured_piece, captured_color, promotion_piece
+        INTEGER, INTENT(IN) :: captured_piece, captured_color
 
         INTEGER :: i
 

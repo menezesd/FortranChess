@@ -7,6 +7,7 @@ PROGRAM Fortran_Chess
     USE Move_Generation ! Needs Make_Unmake implicitly
     USE Make_Unmake
     USE Search
+    USE Transposition_Table, ONLY: init_zobrist_keys
     IMPLICIT NONE
 
     TYPE(Board_Type) :: game_board
@@ -44,7 +45,8 @@ PROGRAM Fortran_Chess
         END SELECT
     END DO
 
-    ! --- Initialize and Print Board ---
+    ! --- Initialize Zobrist Keys and Board ---
+    CALL init_zobrist_keys()
     CALL init_board(game_board)
     CALL print_board(game_board)
 

@@ -4,7 +4,8 @@
 ! ============================================
 MODULE Make_Unmake
     USE Chess_Types
-    USE Board_Utils
+    USE Board_Utils, ONLY: get_opponent_color, update_piece_lists, update_piece_lists_unmake, file_rank_to_sq
+    USE Transposition_Table, ONLY: ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: make_move, unmake_move
@@ -37,6 +38,7 @@ CONTAINS
 
         INTEGER :: r_from, f_from, r_to, f_to, player_color, opponent_color
         INTEGER :: piece_moved, color_moved, r_capture
+        INTEGER(KIND=8) :: new_key
         TYPE(Square_Type) :: from_sq, to_sq
 
         player_color = board%current_player
@@ -53,6 +55,7 @@ CONTAINS
         unmake_info%prev_wc_q = board%wc_q
         unmake_info%prev_bc_k = board%bc_k
         unmake_info%prev_bc_q = board%bc_q
+        unmake_info%prev_zobrist_key = board%zobrist_key
 
         piece_moved = board%squares_piece(r_from, f_from)
         color_moved = board%squares_color(r_from, f_from)
@@ -144,6 +147,41 @@ CONTAINS
         ! 5. Switch Player
         board%current_player = opponent_color
 
+        ! --- Update Zobrist Key ---
+        ! Start with current key
+        new_key = board%zobrist_key
+
+        ! XOR out the piece from its original square
+        new_key = IEOR(new_key, ZOBRIST_PIECES(piece_moved, player_color, r_from, f_from))
+        ! XOR in the piece at its new square
+        new_key = IEOR(new_key, ZOBRIST_PIECES(piece_moved, player_color, r_to, f_to))
+
+        ! Handle captures
+        IF (unmake_info%captured_piece_type /= NO_PIECE) THEN
+            new_key = IEOR(new_key, &
+                ZOBRIST_PIECES(unmake_info%captured_piece_type, opponent_color, &
+                               unmake_info%captured_sq%rank, unmake_info%captured_sq%file))
+        END IF
+
+        ! Handle castling rights changes
+        IF (unmake_info%prev_wc_k .NEQV. board%wc_k) new_key = IEOR(new_key, ZOBRIST_CASTLING(1))
+        IF (unmake_info%prev_wc_q .NEQV. board%wc_q) new_key = IEOR(new_key, ZOBRIST_CASTLING(2))
+        IF (unmake_info%prev_bc_k .NEQV. board%bc_k) new_key = IEOR(new_key, ZOBRIST_CASTLING(3))
+        IF (unmake_info%prev_bc_q .NEQV. board%bc_q) new_key = IEOR(new_key, ZOBRIST_CASTLING(4))
+
+        ! Handle en passant changes
+        IF (unmake_info%prev_ep_target_present) THEN
+            new_key = IEOR(new_key, ZOBRIST_EP_FILE(unmake_info%prev_ep_target_sq%file))
+        END IF
+        IF (board%ep_target_present) THEN
+            new_key = IEOR(new_key, ZOBRIST_EP_FILE(board%ep_target_sq%file))
+        END IF
+
+        ! Always flip the side to move key
+        new_key = IEOR(new_key, ZOBRIST_BLACK_TO_MOVE)
+        
+        board%zobrist_key = new_key
+
         ! 6. Update piece lists
         CALL update_piece_lists(board, from_sq, to_sq, unmake_info%captured_sq, &
                                unmake_info%captured_piece_type, unmake_info%captured_piece_color, &
@@ -191,6 +229,7 @@ CONTAINS
         board%wc_q = unmake_info%prev_wc_q
         board%bc_k = unmake_info%prev_bc_k
         board%bc_q = unmake_info%prev_bc_q
+        board%zobrist_key = unmake_info%prev_zobrist_key
 
         ! 3. Reverse Piece Movements
         r_from = move%from_sq%rank; f_from = move%from_sq%file
@@ -237,8 +276,7 @@ CONTAINS
 
         ! Update piece lists for unmake
         CALL update_piece_lists_unmake(board, move%from_sq, move%to_sq, unmake_info%captured_sq, &
-                                       unmake_info%captured_piece_type, unmake_info%captured_piece_color, &
-                                       move%promotion_piece)
+                                       unmake_info%captured_piece_type, unmake_info%captured_piece_color)
 
     END SUBROUTINE unmake_move
 

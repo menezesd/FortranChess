@@ -176,7 +176,7 @@ CONTAINS
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(INOUT) :: num_moves
 
-        INTEGER :: r, f, nr, nf, target_piece, target_color, dr, df
+        INTEGER :: r, f, nr, nf, target_piece, target_color
         INTEGER, DIMENSION(8,2) :: deltas
         TYPE(Square_Type) :: to_sq
         TYPE(Move_Type) :: new_move
