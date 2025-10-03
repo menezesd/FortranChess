@@ -18,6 +18,52 @@ MODULE Search
 
 CONTAINS
 
+    ! --- Quiescence Search ---
+    RECURSIVE INTEGER FUNCTION quiescence(board, alpha, beta) RESULT(score)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        INTEGER, INTENT(IN) :: alpha, beta
+
+        INTEGER :: stand_pat, current_alpha, i
+        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: captures
+        INTEGER :: num_captures
+        TYPE(Move_Type) :: current_move
+        TYPE(UnmakeInfo_Type) :: unmake_info
+
+        current_alpha = alpha
+
+        stand_pat = evaluate_board(board)
+
+        IF (stand_pat >= beta) THEN
+            score = beta
+            RETURN
+        END IF
+
+        IF (current_alpha < stand_pat) THEN
+            current_alpha = stand_pat
+        END IF
+
+        CALL generate_captures(board, captures, num_captures)
+        CALL order_moves(board, captures, num_captures)
+
+        DO i = 1, num_captures
+            current_move = captures(i)
+            CALL make_move(board, current_move, unmake_info)
+            score = -quiescence(board, -beta, -current_alpha)
+            CALL unmake_move(board, current_move, unmake_info)
+
+            IF (score >= beta) THEN
+                score = beta
+                RETURN
+            END IF
+
+            IF (score > current_alpha) THEN
+                current_alpha = score
+            END IF
+        END DO
+
+        score = current_alpha
+    END FUNCTION quiescence
+
     ! --- Negamax Search (Recursive Helper) ---
     ! Implements the negamax algorithm with alpha-beta pruning for chess move evaluation.
     !
@@ -55,7 +101,7 @@ CONTAINS
 
         ! Base case: evaluate position when search depth is reached
         IF (depth <= 0) THEN
-            best_score = evaluate_board(board)
+            best_score = quiescence(board, alpha, beta)
             RETURN
         END IF
 
@@ -128,24 +174,22 @@ CONTAINS
     ! Side effects:
     !   Temporarily modifies the board during search (restored via make/unmake)
     !   May take significant time for deep searches
-    SUBROUTINE find_best_move(board, depth, best_move_found, best_move)
+    SUBROUTINE find_best_move(board, max_depth, best_move_found, best_move)
         TYPE(Board_Type), INTENT(INOUT) :: board
-        INTEGER, INTENT(IN) :: depth
+        INTEGER, INTENT(IN) :: max_depth
         LOGICAL, INTENT(OUT) :: best_move_found
         TYPE(Move_Type), INTENT(OUT) :: best_move
 
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
-        INTEGER :: num_moves, i
+        INTEGER :: num_moves, i, d
         INTEGER :: score, best_score_so_far, alpha, beta
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
 
         best_move_found = .FALSE.
         best_score_so_far = -INF
-        alpha = -INF  ! No lower bound initially
-        beta = INF    ! No upper bound initially
-
-        ! Generate all legal moves
+        
+        ! Generate legal moves at the root
         CALL generate_moves(board, moves, num_moves)
 
         ! No legal moves available
@@ -153,34 +197,53 @@ CONTAINS
              RETURN
         END IF
 
-        ! Default to first move if no better move found
-        best_move = moves(1)
-        best_move_found = .TRUE.
+        ! Iterative Deepening Loop
+        DO d = 1, max_depth
+            alpha = -INF
+            beta = INF
+            best_score_so_far = -INF
 
-        ! Evaluate each possible move
-        DO i = 1, num_moves
-            current_move = moves(i)
+            ! Evaluate each possible move at the current depth
+            DO i = 1, num_moves
+                current_move = moves(i)
 
-            ! Make the move
-            CALL make_move(board, current_move, unmake_info)
+                ! Make the move
+                CALL make_move(board, current_move, unmake_info)
 
-            ! Search from opponent's perspective
-            score = -negamax(board, depth - 1, -beta, -alpha)
+                ! Search from opponent's perspective
+                score = -negamax(board, d - 1, -beta, -alpha)
 
-            ! Undo the move
-            CALL unmake_move(board, current_move, unmake_info)
+                ! Undo the move
+                CALL unmake_move(board, current_move, unmake_info)
 
-            ! Check if this move is better than previous best
-            IF (score > best_score_so_far) THEN
-                 best_score_so_far = score
-                 best_move = current_move
-            END IF
+                ! Check if this move is better than previous best for this iteration
+                IF (score > best_score_so_far) THEN
+                     best_score_so_far = score
+                     best_move = current_move
+                     best_move_found = .TRUE.
+                END IF
 
-            ! Update alpha for root node (tracks best score found)
-            IF (best_score_so_far > alpha) THEN
-                 alpha = best_score_so_far
-            END IF
-            ! Note: No beta cutoff at root level - we want the actual best move
+                ! Update alpha for root node
+                IF (best_score_so_far > alpha) THEN
+                     alpha = best_score_so_far
+                END IF
+            END DO
+            
+            ! Move ordering for the next iteration: move the best move from this iteration to the front
+            DO i = 1, num_moves
+                IF (moves(i)%from_sq%rank == best_move%from_sq%rank .AND. &
+                    moves(i)%from_sq%file == best_move%from_sq%file .AND. &
+                    moves(i)%to_sq%rank == best_move%to_sq%rank .AND. &
+                    moves(i)%to_sq%file == best_move%to_sq%file .AND. &
+                    moves(i)%promotion_piece == best_move%promotion_piece) THEN
+                    
+                    current_move = moves(1)
+                    moves(1) = moves(i)
+                    moves(i) = current_move
+                    EXIT
+                END IF
+            END DO
+
         END DO
 
     END SUBROUTINE find_best_move

@@ -225,22 +225,30 @@ CONTAINS
         TYPE(Board_Type), INTENT(IN) :: board
         INTEGER, INTENT(IN)          :: king_color
         TYPE(Square_Type)            :: king_sq
-        INTEGER :: r, f
+        INTEGER :: i, r, f
 
         king_sq%rank = 0 ! Indicate not found initially
         king_sq%file = 0
 
-        DO r = 1, BOARD_SIZE
-            DO f = 1, BOARD_SIZE
-                IF (board%squares_piece(r, f) == KING .AND. &
-                    board%squares_color(r, f) == king_color) THEN
-                    king_sq%rank = r
-                    king_sq%file = f
+        IF (king_color == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                r = board%white_pieces(i)%rank
+                f = board%white_pieces(i)%file
+                IF (board%squares_piece(r, f) == KING) THEN
+                    king_sq = board%white_pieces(i)
                     RETURN
                 END IF
             END DO
-
-        END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                r = board%black_pieces(i)%rank
+                f = board%black_pieces(i)%file
+                IF (board%squares_piece(r, f) == KING) THEN
+                    king_sq = board%black_pieces(i)
+                    RETURN
+                END IF
+            END DO
+        END IF
 
     END FUNCTION find_king
 
@@ -274,6 +282,16 @@ CONTAINS
         is_square_attacked = .FALSE. ! Assume not attacked initially
         tr = target_sq%rank
         tf = target_sq%file
+
+        ! Initialize deltas from parameters
+        knight_deltas = KNIGHT_DELTAS
+        king_deltas = KING_DELTAS
+        sliding_deltas = QUEEN_DIRS
+
+        ! Initialize deltas
+        knight_deltas = KNIGHT_DELTAS
+        king_deltas = KING_DELTAS
+        sliding_deltas = QUEEN_DIRS
 
         ! 1. Check Pawn attacks
         IF (attacker_color == WHITE) THEN
@@ -410,8 +428,11 @@ CONTAINS
         INTEGER :: i, piece_moved, color_moved
         LOGICAL :: found
 
-        piece_moved = board%squares_piece(from_sq%rank, from_sq%file)
-        color_moved = board%squares_color(from_sq%rank, from_sq%file)
+        ! This is incorrect, the piece has already been moved on the board
+        ! piece_moved = board%squares_piece(from_sq%rank, from_sq%file)
+        ! color_moved = board%squares_color(from_sq%rank, from_sq%file)
+        piece_moved = board%squares_piece(to_sq%rank, to_sq%file)
+        color_moved = get_opponent_color(board%current_player)
 
         ! Remove captured piece from opponent's list if any
         IF (captured_piece /= NO_PIECE) THEN
