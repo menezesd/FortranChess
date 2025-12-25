@@ -38,7 +38,7 @@ CONTAINS
         move_found_internal = .FALSE.
         game_over_flag = .FALSE. ! Default to not game over
 
-        PRINT *, " " ! Newline
+        PRINT *, "" ! Newline
         PRINT *, "Your turn. Enter move (e.g., e2e4, e7e8q): "
 
         DO WHILE (.NOT. move_found_internal .AND. .NOT. game_over_flag)

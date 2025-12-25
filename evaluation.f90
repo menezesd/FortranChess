@@ -3,8 +3,9 @@
 ! Purpose: Static board evaluation using material and piece-square tables
 ! ============================================
 MODULE Evaluation
-    USE Chess_Types
-    USE Board_Utils
+    USE Chess_Types, ONLY: PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, NO_PIECE, &
+                           PAWN_VAL, KNIGHT_VAL, BISHOP_VAL, ROOK_VAL, QUEEN_VAL, KING_VAL, &
+                           BOARD_SIZE, Board_Type, Square_Type, get_piece_order, WHITE, BLACK
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: evaluate_board
@@ -153,14 +154,11 @@ MODULE Evaluation
         SHAPE(KING_PST_EG), ORDER=[2,1])
 
 
-     INTEGER, PARAMETER :: PAWN_VAL = 100, KNIGHT_VAL = 320, BISHOP_VAL = 330, &
-                           ROOK_VAL = 500, QUEEN_VAL = 900, KING_VAL = 20000
-
 CONTAINS
 
     ! --- Get Piece Phase Value ---
     ! Returns the phase contribution for a piece type (used for tapered eval).
-    INTEGER FUNCTION get_piece_phase(piece)
+    PURE INTEGER FUNCTION get_piece_phase(piece)
         INTEGER, INTENT(IN) :: piece
         SELECT CASE(piece)
         CASE(KNIGHT); get_piece_phase = KNIGHT_PHASE
@@ -208,6 +206,23 @@ CONTAINS
             eg_pst = 0
         END SELECT
     END SUBROUTINE get_piece_eval
+
+    ! --- Calculate Tapered PST Value ---
+    ! Blends middlegame and endgame PST values based on the game phase.
+    !
+    ! Parameters:
+    !   mg_val (IN): Middlegame PST value
+    !   eg_val (IN): Endgame PST value
+    !   phase (IN): Current game phase (0 = endgame, TOTAL_PHASE = middlegame)
+    !   total_phase (IN): Maximum possible game phase value
+    !
+    ! Returns:
+    !   Blended PST value
+    PURE INTEGER FUNCTION tapered_pst_value(mg_val, eg_val, phase, total_phase) RESULT(blended_value)
+        INTEGER, INTENT(IN) :: mg_val, eg_val, phase, total_phase
+        blended_value = ((mg_val * phase) + (eg_val * (total_phase - phase))) / total_phase
+    END FUNCTION tapered_pst_value
+
     ! --- Evaluate Board ---
     ! Performs static evaluation of the current board position.
     !
@@ -260,7 +275,7 @@ CONTAINS
             eval_rank = r  ! White: rank 1-8 as-is
 
             CALL get_piece_eval(piece, eval_rank, f, piece_value, mg_pst_val, eg_pst_val)
-            pst_value = ((mg_pst_val * phase) + (eg_pst_val * (TOTAL_PHASE - phase))) / TOTAL_PHASE
+            pst_value = tapered_pst_value(mg_pst_val, eg_pst_val, phase, TOTAL_PHASE)
             evaluate_board = evaluate_board + piece_value + pst_value
         END DO
 
@@ -273,7 +288,7 @@ CONTAINS
             eval_rank = BOARD_SIZE - r + 1  ! Black: flip ranks (8->1, 1->8)
 
             CALL get_piece_eval(piece, eval_rank, f, piece_value, mg_pst_val, eg_pst_val)
-            pst_value = ((mg_pst_val * phase) + (eg_pst_val * (TOTAL_PHASE - phase))) / TOTAL_PHASE
+            pst_value = tapered_pst_value(mg_pst_val, eg_pst_val, phase, TOTAL_PHASE)
             evaluate_board = evaluate_board - (piece_value + pst_value)
         END DO
 
