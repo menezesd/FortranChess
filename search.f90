@@ -11,7 +11,8 @@ MODULE Search
     USE Transposition_Table, ONLY: probe_tt, store_tt_entry, TT_Entry_Type, &
         HASH_FLAG_EXACT, HASH_FLAG_ALPHA, HASH_FLAG_BETA, new_search_generation, &
         ZOBRIST_BLACK_TO_MOVE, ZOBRIST_EP_FILE
-    USE Move_Ordering_Heuristics
+    USE Move_Ordering_Heuristics, ONLY: clear_killers, &
+        store_killer, update_history_score, clear_history, moves_equal, order_moves_with_killers
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: find_best_move
@@ -197,8 +198,8 @@ CONTAINS
             END DO
         END IF
 
-        ! Order moves with killer heuristic (now using external module)
-        CALL order_moves_with_killers(board, moves, num_moves, ply)
+        ! Order moves
+        CALL order_moves(board, moves, num_moves)
 
         ! Initialize best score to worst possible outcome
         best_score = -INF
@@ -237,6 +238,12 @@ CONTAINS
                  CALL store_tt_entry(board%zobrist_key, depth_param, beta, HASH_FLAG_BETA, moves(i))
                  ! Store killer move if it's a quiet move (now using external module)
                  CALL store_killer(current_move, ply)
+                 IF (current_move%captured_piece == NO_PIECE .AND. &
+                     .NOT. current_move%is_castling .AND. &
+                     .NOT. current_move%is_en_passant .AND. &
+                     current_move%promotion_piece == NO_PIECE) THEN
+                     CALL update_history_score(board, current_move, current_depth)
+                 END IF
                  EXIT ! Prune remaining moves
             END IF
         END DO
@@ -269,30 +276,34 @@ CONTAINS
     ! Side effects:
     !   Temporarily modifies the board during search (restored via make/unmake)
     !   May take significant time for deep searches
-    SUBROUTINE find_best_move(board, max_depth, best_move_found, best_move)
+    SUBROUTINE find_best_move(board, max_depth, best_move_found, best_move, best_score_out)
         TYPE(Board_Type), INTENT(INOUT) :: board
         INTEGER, INTENT(IN) :: max_depth
         LOGICAL, INTENT(OUT) :: best_move_found
         TYPE(Move_Type), INTENT(OUT) :: best_move
+        INTEGER, INTENT(OUT), OPTIONAL :: best_score_out
 
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves, i, d
         INTEGER :: score, best_score_so_far, alpha, beta, next_alpha, next_beta
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
-        INTEGER :: aspiration_delta ! NEW
-        LOGICAL :: research_needed ! NEW
-        INTEGER :: last_iteration_score ! NEW
+        INTEGER :: aspiration_delta
+        LOGICAL :: research_needed
+        INTEGER :: last_iteration_score
+        INTEGER :: start_count, count_rate
 
         best_move_found = .FALSE.
         best_score_so_far = -INF
         last_iteration_score = 0 ! Initialize
+        CALL SYSTEM_CLOCK(start_count, count_rate)
 
         ! Aspiration window delta
         aspiration_delta = 50 ! Centipawns
 
         ! Clear killer moves and increment TT generation before new search (now using external module)
         CALL clear_killers()
+        CALL clear_history()
         CALL new_search_generation()
 
         ! Generate legal moves at the root
@@ -371,6 +382,7 @@ CONTAINS
 
             ! Store score for next iteration's aspiration window
             last_iteration_score = best_score_so_far
+            ! (Info printing handled by caller; stats available via optional outputs)
 
             ! Move ordering for the next iteration: move the best move from this iteration to the front
             DO i = 1, num_moves
@@ -383,6 +395,8 @@ CONTAINS
             END DO
 
         END DO
+
+        IF (PRESENT(best_score_out)) best_score_out = best_score_so_far
 
     END SUBROUTINE find_best_move
 
