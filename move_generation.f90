@@ -70,7 +70,9 @@ CONTAINS
         CALL generate_pseudo_moves(board, pseudo_moves, num_pseudo_moves)
 
         DO i = 1, num_pseudo_moves
-            IF (pseudo_moves(i)%captured_piece /= NO_PIECE) THEN
+            ! Include actual captures AND promotions (which are tactical)
+            IF (pseudo_moves(i)%captured_piece /= NO_PIECE .OR. &
+                pseudo_moves(i)%promotion_piece /= NO_PIECE) THEN
                 CALL add_move(move_list, num_moves, pseudo_moves(i))
             END IF
         END DO
@@ -177,20 +179,17 @@ CONTAINS
         INTEGER, INTENT(INOUT) :: num_moves
 
         INTEGER :: r, f, nr, nf, target_piece, target_color
-        INTEGER, DIMENSION(8,2) :: deltas
         TYPE(Square_Type) :: to_sq
         TYPE(Move_Type) :: new_move
         INTEGER :: i
 
         r = from_sq%rank
         f = from_sq%file
-
-        deltas = KNIGHT_DELTAS
         
 
         DO i = 1, 8
-            nr = r + deltas(i, 1)
-            nf = f + deltas(i, 2)
+            nr = r + KNIGHT_DELTAS(i, 1)
+            nf = f + KNIGHT_DELTAS(i, 2)
             IF (sq_is_valid(nr, nf)) THEN
                 target_piece = board%squares_piece(nr, nf)
                 target_color = board%squares_color(nr, nf)
@@ -260,7 +259,6 @@ CONTAINS
         INTEGER, INTENT(INOUT) :: num_moves
 
         INTEGER :: r, f, nr, nf, target_piece, target_color, back_rank
-        INTEGER, DIMENSION(8,2) :: deltas
         TYPE(Square_Type) :: to_sq
         TYPE(Move_Type) :: new_move
         INTEGER :: i
@@ -270,11 +268,11 @@ CONTAINS
         f = from_sq%file
 
         ! 1. Normal Moves
-        deltas = KING_DELTAS
+        
 
         DO i = 1, 8
-            nr = r + deltas(i, 1)
-            nf = f + deltas(i, 2)
+            nr = r + KING_DELTAS(i, 1)
+            nf = f + KING_DELTAS(i, 2)
             IF (sq_is_valid(nr, nf)) THEN
                 target_piece = board%squares_piece(nr, nf)
                 target_color = board%squares_color(nr, nf)

@@ -5,12 +5,13 @@
 MODULE Search
     USE Chess_Types
     USE Board_Utils
-    USE Move_Generation
+    USE Move_Generation, ONLY: generate_moves, generate_captures, order_moves
     USE Make_Unmake
     USE Evaluation
     USE Transposition_Table, ONLY: probe_tt, store_tt_entry, TT_Entry_Type, &
         HASH_FLAG_EXACT, HASH_FLAG_ALPHA, HASH_FLAG_BETA, new_search_generation, &
         ZOBRIST_BLACK_TO_MOVE, ZOBRIST_EP_FILE
+    USE Move_Ordering_Heuristics
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: find_best_move
@@ -19,115 +20,9 @@ MODULE Search
     INTEGER, PARAMETER :: MATE_SCORE = 100000 ! Score indicating checkmate
     INTEGER, PARAMETER :: INF = MATE_SCORE + 1000 ! Represents infinity for alpha-beta bounds
     INTEGER, PARAMETER :: MAX_DEPTH = 64 ! Maximum search depth
-    INTEGER, PARAMETER :: NUM_KILLERS = 2 ! Number of killer moves per ply
-
-    ! Killer move storage: stores quiet moves that caused beta cutoffs
-    TYPE(Move_Type), DIMENSION(NUM_KILLERS, MAX_DEPTH) :: killer_moves
+    ! Removed NUM_KILLERS and killer_moves array as they are now in Move_Ordering_Heuristics
 
 CONTAINS
-
-    ! --- Clear Killer Moves ---
-    ! Resets all killer moves before a new search
-    SUBROUTINE clear_killers()
-        INTEGER :: i, d
-        DO d = 1, MAX_DEPTH
-            DO i = 1, NUM_KILLERS
-                killer_moves(i, d)%from_sq%rank = 0
-                killer_moves(i, d)%from_sq%file = 0
-            END DO
-        END DO
-    END SUBROUTINE clear_killers
-
-    ! --- Store Killer Move ---
-    ! Stores a quiet move that caused a beta cutoff
-    SUBROUTINE store_killer(move, depth)
-        TYPE(Move_Type), INTENT(IN) :: move
-        INTEGER, INTENT(IN) :: depth
-
-        IF (depth < 1 .OR. depth > MAX_DEPTH) RETURN
-        IF (move%captured_piece /= NO_PIECE) RETURN ! Only store quiet moves
-
-        ! Don't store if it's already the first killer
-        IF (moves_equal(killer_moves(1, depth), move)) RETURN
-
-        ! Shift killers down and store new one at slot 1
-        killer_moves(2, depth) = killer_moves(1, depth)
-        killer_moves(1, depth) = move
-    END SUBROUTINE store_killer
-
-    ! --- Check if Move is a Killer ---
-    LOGICAL FUNCTION is_killer(move, depth)
-        TYPE(Move_Type), INTENT(IN) :: move
-        INTEGER, INTENT(IN) :: depth
-        INTEGER :: i
-
-        is_killer = .FALSE.
-        IF (depth < 1 .OR. depth > MAX_DEPTH) RETURN
-
-        DO i = 1, NUM_KILLERS
-            IF (moves_equal(killer_moves(i, depth), move)) THEN
-                is_killer = .TRUE.
-                RETURN
-            END IF
-        END DO
-    END FUNCTION is_killer
-
-    ! --- Check if Two Moves are Equal ---
-    LOGICAL FUNCTION moves_equal(m1, m2)
-        TYPE(Move_Type), INTENT(IN) :: m1, m2
-
-        moves_equal = (m1%from_sq%rank == m2%from_sq%rank .AND. &
-                       m1%from_sq%file == m2%from_sq%file .AND. &
-                       m1%to_sq%rank == m2%to_sq%rank .AND. &
-                       m1%to_sq%file == m2%to_sq%file .AND. &
-                       m1%promotion_piece == m2%promotion_piece)
-    END FUNCTION moves_equal
-
-    ! --- Order Moves with Killer Heuristic ---
-    ! Enhances move ordering by prioritizing killer moves after captures
-    SUBROUTINE order_moves_with_killers(board, move_list, num_moves, depth)
-        TYPE(Board_Type), INTENT(IN) :: board
-        TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
-        INTEGER, INTENT(IN) :: num_moves, depth
-        INTEGER :: i, j
-        TYPE(Move_Type) :: temp_move
-        INTEGER, DIMENSION(num_moves) :: scores
-        INTEGER :: piece_val, captured_val, temp_score
-
-        ! Calculate scores: captures first (MVV-LVA), then killers, then rest
-        DO i = 1, num_moves
-            scores(i) = 0
-            IF (move_list(i)%captured_piece /= NO_PIECE) THEN
-                ! Captures get high scores (10000+)
-                piece_val = get_piece_order(board%squares_piece( &
-                    move_list(i)%from_sq%rank, move_list(i)%from_sq%file))
-                captured_val = get_piece_order(move_list(i)%captured_piece) * 10
-                scores(i) = 10000 + captured_val - piece_val
-            ELSE IF (is_killer(move_list(i), depth)) THEN
-                ! Killer moves get medium scores (5000-5001)
-                DO j = 1, NUM_KILLERS
-                    IF (moves_equal(killer_moves(j, depth), move_list(i))) THEN
-                        scores(i) = 5000 + (NUM_KILLERS - j)
-                        EXIT
-                    END IF
-                END DO
-            END IF
-        END DO
-
-        ! Sort moves by score (descending)
-        DO i = 1, num_moves - 1
-            DO j = i + 1, num_moves
-                IF (scores(i) < scores(j)) THEN
-                    temp_move = move_list(i)
-                    move_list(i) = move_list(j)
-                    move_list(j) = temp_move
-                    temp_score = scores(i)
-                    scores(i) = scores(j)
-                    scores(j) = temp_score
-                END IF
-            END DO
-        END DO
-    END SUBROUTINE order_moves_with_killers
 
     ! --- Quiescence Search ---
     RECURSIVE INTEGER FUNCTION quiescence(board, alpha, beta) RESULT(score)
@@ -154,7 +49,7 @@ CONTAINS
         END IF
 
         CALL generate_captures(board, captures, num_captures)
-        CALL order_moves(board, captures, num_captures)
+        CALL order_moves(board, captures, num_captures) ! NEW: Order captures in quiescence search
 
         DO i = 1, num_captures
             current_move = captures(i)
@@ -199,11 +94,12 @@ CONTAINS
     !
     ! Side effects:
     !   Temporarily modifies the board during recursive search (restored via make/unmake)
-    RECURSIVE INTEGER FUNCTION negamax(board, depth, ply, alpha, beta) RESULT(best_score)
+    RECURSIVE INTEGER FUNCTION negamax(board, depth_param, ply, alpha, beta) RESULT(best_score)
         TYPE(Board_Type), INTENT(INOUT) :: board ! Needs INOUT for make/unmake
-        INTEGER, INTENT(IN) :: depth, ply
+        INTEGER, INTENT(IN) :: depth_param ! Original depth (input only)
+        INTEGER, INTENT(IN) :: ply
         INTEGER, INTENT(INOUT) :: alpha, beta ! alpha and beta are modified by TT lookups
-        INTEGER :: score, current_alpha, next_alpha, next_beta
+        INTEGER :: score, current_alpha = -INF, next_alpha, next_beta
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves, i
         TYPE(Move_Type) :: current_move, best_move_here
@@ -216,29 +112,33 @@ CONTAINS
         LOGICAL :: prev_ep_present
         TYPE(Square_Type) :: prev_ep_sq
         INTEGER(KIND=8) :: prev_key
+        INTEGER :: current_depth ! Local variable for depth, can be modified
 
-        current_alpha = alpha ! Local copy to modify
+        current_depth = depth_param
 
         ! --- Transposition Table Lookup ---
-        tt_hit = probe_tt(board%zobrist_key, depth, alpha, beta, tt_entry)
+        tt_hit = probe_tt(board%zobrist_key, depth_param, alpha, beta, tt_entry)
         IF (tt_hit) THEN
             best_score = tt_entry%score
             RETURN
         END IF
 
         ! Base case: evaluate position when search depth is reached
-        IF (depth <= 0) THEN
+        IF (current_depth <= 0) THEN
             best_score = quiescence(board, alpha, beta)
             RETURN
         END IF
 
         in_check = is_in_check(board, board%current_player)
+        IF (in_check) THEN
+            current_depth = current_depth + 1
+        END IF
 
         ! --- Null Move Pruning (NMP) ---
         ! If not in check, and we have enough material, and depth is sufficient,
         ! try giving a free move to the opponent. If the score is still high
         ! enough to cause a beta cutoff, we can prune this whole branch.
-        IF (.NOT. in_check .AND. depth >= NMP_R + 1 .AND. board%num_white_pieces + board%num_black_pieces > 6) THEN
+        IF (.NOT. in_check .AND. current_depth >= NMP_R + 1 .AND. board%num_white_pieces + board%num_black_pieces > 6) THEN
             ! Make a null move
             prev_key = board%zobrist_key
             prev_ep_present = board%ep_target_present
@@ -254,7 +154,7 @@ CONTAINS
             ! Search with reduced depth and a null window
             next_beta = -beta
             next_alpha = -beta + 1
-            score = -negamax(board, depth - 1 - NMP_R, ply + 1, next_beta, next_alpha)
+            score = -negamax(board, current_depth - 1 - NMP_R, ply + 1, next_beta, next_alpha)
 
             ! Unmake the null move
             board%current_player = get_opponent_color(board%current_player)
@@ -277,7 +177,7 @@ CONTAINS
              IF (in_check) THEN
                  ! Checkmate: current player loses, score decreases with depth
                  ! (prefer faster mates)
-                 best_score = -MATE_SCORE + (10 - depth)
+                 best_score = -MATE_SCORE + (10 - current_depth)
              ELSE
                  ! Stalemate: draw
                  best_score = 0
@@ -285,7 +185,19 @@ CONTAINS
              RETURN
         END IF
 
-        ! Order moves with killer heuristic
+        ! --- TT Best Move Ordering ---
+        IF (tt_hit .AND. tt_entry%best_move%from_sq%rank /= 0) THEN ! Check if TT entry has a valid best move
+            DO i = 1, num_moves
+                IF (moves_equal(moves(i), tt_entry%best_move)) THEN
+                    current_move = moves(1)
+                    moves(1) = moves(i)
+                    moves(i) = current_move
+                    EXIT
+                END IF
+            END DO
+        END IF
+
+        ! Order moves with killer heuristic (now using external module)
         CALL order_moves_with_killers(board, moves, num_moves, ply)
 
         ! Initialize best score to worst possible outcome
@@ -303,7 +215,7 @@ CONTAINS
             ! Negate score because we're switching perspectives
             next_beta = -beta
             next_alpha = -current_alpha
-            score = -negamax(board, depth - 1, ply + 1, next_beta, next_alpha)
+            score = -negamax(board, current_depth - 1, ply + 1, next_beta, next_alpha)
 
             ! Undo the move to restore board state
             CALL unmake_move(board, current_move, unmake_info)
@@ -322,8 +234,8 @@ CONTAINS
             ! Alpha-beta pruning: if current best score is better than
             ! what opponent can force, stop searching this branch
             IF (current_alpha >= beta) THEN
-                 CALL store_tt_entry(board%zobrist_key, depth, beta, HASH_FLAG_BETA, moves(i))
-                 ! Store killer move if it's a quiet move
+                 CALL store_tt_entry(board%zobrist_key, depth_param, beta, HASH_FLAG_BETA, moves(i))
+                 ! Store killer move if it's a quiet move (now using external module)
                  CALL store_killer(current_move, ply)
                  EXIT ! Prune remaining moves
             END IF
@@ -332,9 +244,9 @@ CONTAINS
         ! --- Store result in Transposition Table ---
         IF (best_move_here%from_sq%rank /= 0) THEN
             IF (best_score <= alpha) THEN ! Upper bound
-                CALL store_tt_entry(board%zobrist_key, depth, best_score, HASH_FLAG_ALPHA, best_move_here)
+                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_ALPHA, best_move_here)
             ELSE ! Exact score
-                CALL store_tt_entry(board%zobrist_key, depth, best_score, HASH_FLAG_EXACT, best_move_here)
+                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_EXACT, best_move_here)
             END IF
         END IF
 
@@ -368,11 +280,18 @@ CONTAINS
         INTEGER :: score, best_score_so_far, alpha, beta, next_alpha, next_beta
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
+        INTEGER :: aspiration_delta ! NEW
+        LOGICAL :: research_needed ! NEW
+        INTEGER :: last_iteration_score ! NEW
 
         best_move_found = .FALSE.
         best_score_so_far = -INF
+        last_iteration_score = 0 ! Initialize
 
-        ! Clear killer moves and increment TT generation before new search
+        ! Aspiration window delta
+        aspiration_delta = 50 ! Centipawns
+
+        ! Clear killer moves and increment TT generation before new search (now using external module)
         CALL clear_killers()
         CALL new_search_generation()
 
@@ -386,46 +305,76 @@ CONTAINS
 
         ! Iterative Deepening Loop
         DO d = 1, max_depth
-            alpha = -INF
-            beta = INF
-            best_score_so_far = -INF
+            research_needed = .TRUE.
+            DO WHILE (research_needed)
+                research_needed = .FALSE. ! Assume no re-search needed unless bounds fail
 
-            ! Evaluate each possible move at the current depth
-            DO i = 1, num_moves
-                current_move = moves(i)
-
-                ! Make the move
-                CALL make_move(board, current_move, unmake_info)
-
-                ! Search from opponent's perspective (ply=1 since we're at root+1)
-                next_beta = -beta
-                next_alpha = -alpha
-                score = -negamax(board, d - 1, 1, next_beta, next_alpha)
-
-                ! Undo the move
-                CALL unmake_move(board, current_move, unmake_info)
-
-                ! Check if this move is better than previous best for this iteration
-                IF (score > best_score_so_far) THEN
-                     best_score_so_far = score
-                     best_move = current_move
-                     best_move_found = .TRUE.
+                IF (d == 1) THEN ! First iteration, full window
+                    alpha = -INF
+                    beta = INF
+                ELSE ! Subsequent iterations, aspiration window
+                    alpha = last_iteration_score - aspiration_delta
+                    beta = last_iteration_score + aspiration_delta
                 END IF
 
-                ! Update alpha for root node
-                IF (best_score_so_far > alpha) THEN
-                     alpha = best_score_so_far
+                ! Ensure alpha and beta are within sensible bounds, especially after aspiration
+                IF (alpha < -INF) alpha = -INF
+                IF (beta > INF) beta = INF
+                
+                ! Re-initialize best score for the current search (may be part of a re-search)
+                best_score_so_far = -INF
+                
+                ! Evaluate each possible move at the current depth
+                DO i = 1, num_moves
+                    current_move = moves(i)
+
+                    ! Make the move
+                    CALL make_move(board, current_move, unmake_info)
+
+                    ! Search from opponent's perspective (ply=1 since we're at root+1)
+                    next_beta = -beta
+                    next_alpha = -alpha
+                    score = -negamax(board, d - 1, 1, next_beta, next_alpha)
+
+                    ! Undo the move
+                    CALL unmake_move(board, current_move, unmake_info)
+
+                    ! Check if this move is better than previous best for this iteration
+                    IF (score > best_score_so_far) THEN
+                         best_score_so_far = score
+                         best_move = current_move
+                         best_move_found = .TRUE.
+                    END IF
+
+                    ! Update alpha for root node
+                    IF (best_score_so_far > alpha) THEN
+                         alpha = best_score_so_far
+                    END IF
+                END DO
+
+                ! --- Check Aspiration Window Failure ---
+                IF (d /= 1) THEN ! Only check for aspiration failures after first iteration
+                    IF (best_score_so_far <= last_iteration_score - aspiration_delta) THEN ! Fail low
+                        alpha = -INF
+                        beta = last_iteration_score + aspiration_delta
+                        research_needed = .TRUE.
+                        aspiration_delta = aspiration_delta + 50 ! Widen window for next try
+                    ELSE IF (best_score_so_far >= last_iteration_score + aspiration_delta) THEN ! Fail high
+                        alpha = last_iteration_score - aspiration_delta
+                        beta = INF
+                        research_needed = .TRUE.
+                        aspiration_delta = aspiration_delta + 50 ! Widen window for next try
+                    END IF
                 END IF
-            END DO
+
+            END DO ! End DO WHILE (research_needed)
+
+            ! Store score for next iteration's aspiration window
+            last_iteration_score = best_score_so_far
 
             ! Move ordering for the next iteration: move the best move from this iteration to the front
             DO i = 1, num_moves
-                IF (moves(i)%from_sq%rank == best_move%from_sq%rank .AND. &
-                    moves(i)%from_sq%file == best_move%from_sq%file .AND. &
-                    moves(i)%to_sq%rank == best_move%to_sq%rank .AND. &
-                    moves(i)%to_sq%file == best_move%to_sq%file .AND. &
-                    moves(i)%promotion_piece == best_move%promotion_piece) THEN
-
+                IF (moves_equal(moves(i), best_move)) THEN ! Now using moves_equal from external module
                     current_move = moves(1)
                     moves(1) = moves(i)
                     moves(i) = current_move

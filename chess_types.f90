@@ -19,6 +19,21 @@ MODULE Chess_Types
     INTEGER, PARAMETER :: WHITE    = 1
     INTEGER, PARAMETER :: BLACK    = 2
 
+    ! --- Constants for Game Status ---
+    INTEGER, PARAMETER :: GAME_ONGOING   = 0
+    INTEGER, PARAMETER :: GAME_CHECKMATE = 1
+    INTEGER, PARAMETER :: GAME_STALEMATE = 2
+    INTEGER, PARAMETER :: NO_WINNER      = 0 ! Can be used with Game Status to indicate draw
+
+    ! --- Constants for Piece Values (Centipawns) ---
+    INTEGER, PARAMETER :: PAWN_VAL   = 100
+    INTEGER, PARAMETER :: KNIGHT_VAL = 320
+    INTEGER, PARAMETER :: BISHOP_VAL = 330
+    INTEGER, PARAMETER :: ROOK_VAL   = 500
+    INTEGER, PARAMETER :: QUEEN_VAL  = 900
+    INTEGER, PARAMETER :: KING_VAL   = 20000
+
+
     ! --- Board Dimensions ---
     INTEGER, PARAMETER :: BOARD_SIZE = 8
 

@@ -8,21 +8,22 @@ PROGRAM Fortran_Chess
     USE Make_Unmake
     USE Search
     USE Transposition_Table, ONLY: init_zobrist_keys
-    USE User_Input_Processor ! NEW: For human move input processing
+    USE User_Input_Processor
+    USE Game_State_Checker
     IMPLICIT NONE
 
     TYPE(Board_Type) :: game_board
     TYPE(Move_Type) :: chosen_move
     TYPE(UnmakeInfo_Type) :: move_info ! Needed for make_move call
     LOGICAL :: move_found, is_human_turn, game_over
-    INTEGER :: human_player_color, ai_player_color, winner
+    INTEGER :: human_player_color, ai_player_color
     INTEGER :: search_depth
     CHARACTER(LEN=10) :: user_input ! Keep for color selection
     TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
     INTEGER :: num_legal_moves
+    INTEGER :: game_winner_color, current_game_status
 
     search_depth = 5 ! AI Difficulty
-
     ! --- Player Color Selection ---
     DO
         PRINT *, "Choose your color (White/Black): "
@@ -43,6 +44,17 @@ PROGRAM Fortran_Chess
         END SELECT
     END DO
 
+    ! --- Search Depth Selection ---
+    DO
+        PRINT *, "Enter AI search depth (e.g., 5): "
+        READ *, search_depth
+        IF (search_depth >= 1 .AND. search_depth <= 10) THEN ! Example valid range
+            EXIT
+        ELSE
+            PRINT *, "Invalid search depth. Please enter a number between 1 and 10."
+        END IF
+    END DO
+
     ! --- Initialize Zobrist Keys and Board ---
     CALL init_zobrist_keys()
     CALL init_board(game_board)
@@ -53,21 +65,21 @@ PROGRAM Fortran_Chess
     DO WHILE (.NOT. game_over)
 
         ! 1. Check Game Over
-        ! Need a way to check checkmate/stalemate without modifying board state here,
-        ! or accept that generate_moves modifies it temporarily.
-        CALL generate_moves(game_board, legal_moves, num_legal_moves)
-        IF (num_legal_moves == 0) THEN
-            IF (is_in_check(game_board, game_board%current_player)) THEN
-                winner = get_opponent_color(game_board%current_player)
-                IF (winner == WHITE) THEN
-                    PRINT *, "=== CHECKMATE! White wins! ==="
-                ELSE
-                    PRINT *, "=== CHECKMATE! Black wins! ==="
-                END IF
-            ELSE
-                 PRINT *, "=== STALEMATE! Draw. ==="
-            END IF
-            game_over = .TRUE.
+        game_over = is_game_over(game_board, game_winner_color, current_game_status)
+        IF (game_over) THEN
+            SELECT CASE (current_game_status)
+                CASE (GAME_CHECKMATE)
+                    IF (game_winner_color == WHITE) THEN
+                        PRINT *, "=== CHECKMATE! White wins! ==="
+                    ELSE
+                        PRINT *, "=== CHECKMATE! Black wins! ==="
+                    END IF
+                CASE (GAME_STALEMATE)
+                    PRINT *, "=== STALEMATE! Draw. ==="
+                CASE DEFAULT
+                    ! Should not happen
+                    PRINT *, "Error: Unknown game over status."
+            END SELECT
             EXIT ! Exit game loop
         END IF
 
@@ -88,7 +100,7 @@ PROGRAM Fortran_Chess
 
         ELSE
             ! --- AI's Turn ---
-            PRINT *, " " ! Newline
+                        PRINT *, "" ! Newline
             PRINT *, "Computer's turn. Thinking..."
             CALL find_best_move(game_board, search_depth, move_found, chosen_move)
             IF (move_found) THEN
