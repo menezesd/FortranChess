@@ -8,6 +8,7 @@ PROGRAM Fortran_Chess
     USE Make_Unmake
     USE Search
     USE Transposition_Table, ONLY: init_zobrist_keys
+    USE User_Input_Processor ! NEW: For human move input processing
     IMPLICIT NONE
 
     TYPE(Board_Type) :: game_board
@@ -16,12 +17,9 @@ PROGRAM Fortran_Chess
     LOGICAL :: move_found, is_human_turn, game_over
     INTEGER :: human_player_color, ai_player_color, winner
     INTEGER :: search_depth
-    CHARACTER(LEN=10) :: user_input
-    CHARACTER(LEN=1) :: from_f_char, from_r_char, to_f_char, to_r_char, promo_char
-    TYPE(Square_Type) :: parsed_from_sq, parsed_to_sq
-    INTEGER :: parsed_promo_piece
+    CHARACTER(LEN=10) :: user_input ! Keep for color selection
     TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
-    INTEGER :: num_legal_moves, i
+    INTEGER :: num_legal_moves
 
     search_depth = 5 ! AI Difficulty
 
@@ -78,61 +76,15 @@ PROGRAM Fortran_Chess
 
         IF (is_human_turn) THEN
             ! --- Human's Turn ---
-            PRINT *, " " ! Newline
-            PRINT *, "Your turn. Enter move (e.g., e2e4, e7e8q): "
-            move_found = .FALSE.
-            DO WHILE (.NOT. move_found)
-                READ *, user_input
-                 IF (TRIM(ADJUSTL(user_input)) == 'quit' .OR. TRIM(ADJUSTL(user_input)) == 'exit') THEN
-                    PRINT *, "Exiting game."
-                    game_over = .TRUE.
-                    EXIT ! Exit inner loop
-                 END IF
+            move_found = get_human_move(legal_moves, num_legal_moves, chosen_move, game_over)
 
-                ! Basic Parsing (Needs Error Handling!)
-                IF (LEN_TRIM(user_input) >= 4) THEN
-                    from_f_char = user_input(1:1); from_r_char = user_input(2:2)
-                    to_f_char = user_input(3:3);   to_r_char = user_input(4:4)
-                    parsed_from_sq%file = char_to_file(from_f_char)
-                    parsed_from_sq%rank = char_to_rank(from_r_char)
-                    parsed_to_sq%file = char_to_file(to_f_char)
-                    parsed_to_sq%rank = char_to_rank(to_r_char)
+            IF (game_over) EXIT ! Exit game loop if user quit
 
-                    parsed_promo_piece = NO_PIECE
-                    IF (LEN_TRIM(user_input) == 5) THEN
-                         promo_char = user_input(5:5)
-                         SELECT CASE(promo_char)
-                         CASE('q'); parsed_promo_piece = QUEEN
-                         CASE('r'); parsed_promo_piece = ROOK
-                         CASE('b'); parsed_promo_piece = BISHOP
-                         CASE('n'); parsed_promo_piece = KNIGHT
-                         END SELECT
-                    END IF
-
-                    ! Find the move in the legal list
-                    DO i = 1, num_legal_moves
-                         IF (legal_moves(i)%from_sq%rank == parsed_from_sq%rank .AND. &
-                             legal_moves(i)%from_sq%file == parsed_from_sq%file .AND. &
-                             legal_moves(i)%to_sq%rank == parsed_to_sq%rank .AND. &
-                             legal_moves(i)%to_sq%file == parsed_to_sq%file .AND. &
-                             legal_moves(i)%promotion_piece == parsed_promo_piece) THEN
-                             chosen_move = legal_moves(i)
-                             move_found = .TRUE.
-                             EXIT ! Exit move finding loop
-                         END IF
-                    END DO
-                END IF
-
-                IF (.NOT. move_found .AND. .NOT. game_over) THEN
-                     PRINT *, "Invalid or illegal move. Try again:"
-                END IF
-            END DO ! End move input loop
-
-             IF (game_over) EXIT ! Exit game loop if user quit
-
-             ! Make human move
-             PRINT *, "You moved." ! Add more detail later
-             CALL make_move(game_board, chosen_move, move_info)
+            IF (move_found) THEN
+                 ! Make human move
+                 PRINT *, "You moved." ! Add more detail later
+                 CALL make_move(game_board, chosen_move, move_info)
+            END IF
 
         ELSE
             ! --- AI's Turn ---
