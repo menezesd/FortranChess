@@ -1,8 +1,10 @@
 MODULE Move_Ordering_Heuristics
-    USE Chess_Types, ONLY: get_piece_order, Move_Type, Board_Type, NO_PIECE, MAX_MOVES
+    USE Chess_Types, ONLY: get_piece_order, Move_Type, Board_Type, NO_PIECE, MAX_MOVES, &
+        PAWN, KNIGHT, BISHOP, WHITE, BLACK, BOARD_SIZE, KING, QUEEN, ROOK
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: clear_killers, store_killer, is_killer, moves_equal, order_moves_with_killers
+    PUBLIC :: clear_killers, store_killer, is_killer, moves_equal, order_moves_with_killers, &
+              clear_history, update_history_score
 
     ! Constants for killer move storage
     INTEGER, PARAMETER :: NUM_KILLERS = 2 ! Number of killer moves per ply
@@ -10,6 +12,10 @@ MODULE Move_Ordering_Heuristics
 
     ! Killer move storage: stores quiet moves that caused beta cutoffs
     TYPE(Move_Type), DIMENSION(NUM_KILLERS, MAX_SEARCH_DEPTH) :: killer_moves
+
+    ! History heuristic table: color x piece x rank x file
+    INTEGER, DIMENSION(2, 6, BOARD_SIZE, BOARD_SIZE) :: history_table = 0
+    INTEGER, PARAMETER :: HISTORY_DECAY_THRESHOLD = 200000
 
 CONTAINS
 
@@ -36,6 +42,11 @@ CONTAINS
         END DO
     END SUBROUTINE clear_killers
 
+    ! --- Clear History Table ---
+    SUBROUTINE clear_history()
+        history_table = 0
+    END SUBROUTINE clear_history
+
     ! --- Store Killer Move ---
     ! Stores a quiet move that caused a beta cutoff
     SUBROUTINE store_killer(move, ply)
@@ -49,9 +60,38 @@ CONTAINS
         IF (moves_equal(killer_moves(1, ply), move)) RETURN
 
         ! Shift killers down and store new one at slot 1
-        killer_moves(2, ply) = killer_moves(1, ply)
-        killer_moves(1, ply) = move
+            killer_moves(2, ply) = killer_moves(1, ply)
+            killer_moves(1, ply) = move
     END SUBROUTINE store_killer
+
+    ! --- Update History Heuristic ---
+    ! Adds a bonus for a quiet move that caused a beta cutoff.
+    SUBROUTINE update_history_score(board, move, depth)
+        TYPE(Board_Type), INTENT(IN) :: board
+        TYPE(Move_Type), INTENT(IN) :: move
+        INTEGER, INTENT(IN) :: depth
+
+        INTEGER :: color_moved, piece_moved, bonus, rank_to, file_to
+
+        color_moved = board%squares_color(move%from_sq%rank, move%from_sq%file)
+        piece_moved = board%squares_piece(move%from_sq%rank, move%from_sq%file)
+        IF (color_moved < 1 .OR. color_moved > 2) RETURN
+        IF (piece_moved < 1 .OR. piece_moved > 6) RETURN
+
+        rank_to = move%to_sq%rank
+        file_to = move%to_sq%file
+        IF (rank_to < 1 .OR. rank_to > BOARD_SIZE) RETURN
+        IF (file_to < 1 .OR. file_to > BOARD_SIZE) RETURN
+
+        bonus = depth * depth
+        history_table(color_moved, piece_moved, rank_to, file_to) = &
+             history_table(color_moved, piece_moved, rank_to, file_to) + bonus
+
+        ! Prevent runaway growth by decaying occasionally
+        IF (history_table(color_moved, piece_moved, rank_to, file_to) > HISTORY_DECAY_THRESHOLD) THEN
+            history_table = history_table / 2
+        END IF
+    END SUBROUTINE update_history_score
 
     ! --- Check if Move is a Killer ---
     LOGICAL FUNCTION is_killer(move, ply)
@@ -89,8 +129,12 @@ CONTAINS
         INTEGER, INTENT(IN) :: num_moves, ply
         INTEGER :: i, j
         TYPE(Move_Type) :: temp_move
-        INTEGER, DIMENSION(num_moves) :: scores
+        INTEGER, DIMENSION(MAX_MOVES) :: scores
         INTEGER :: piece_val, captured_val, temp_score
+        INTEGER :: piece_moved, mover_color, quiet_bonus
+        INTEGER :: history_score
+
+        IF (num_moves <= 0) RETURN
 
         ! Calculate scores: captures first (MVV-LVA), then killers, then rest
         DO i = 1, num_moves
@@ -109,6 +153,44 @@ CONTAINS
                         EXIT
                     END IF
                 END DO
+            ELSE
+                ! Quiet move ordering: central pushes/development + history heuristic
+                piece_moved = board%squares_piece(move_list(i)%from_sq%rank, move_list(i)%from_sq%file)
+                mover_color = board%squares_color(move_list(i)%from_sq%rank, move_list(i)%from_sq%file)
+                quiet_bonus = 0
+
+                ! Encourage castling moves early
+                IF (move_list(i)%is_castling) quiet_bonus = quiet_bonus + 40
+
+                ! Encourage central pawn pushes
+                IF (piece_moved == PAWN) THEN
+                    SELECT CASE (move_list(i)%to_sq%file)
+                    CASE (4, 5); quiet_bonus = quiet_bonus + 30
+                    CASE (3, 6); quiet_bonus = quiet_bonus + 15
+                    CASE (2, 7); quiet_bonus = quiet_bonus + 5
+                    END SELECT
+                END IF
+
+                ! Encourage developing knights/bishops off the back rank
+                IF (piece_moved == KNIGHT .OR. piece_moved == BISHOP) THEN
+                    IF ((mover_color == WHITE .AND. move_list(i)%from_sq%rank == 1) .OR. &
+                        (mover_color == BLACK .AND. move_list(i)%from_sq%rank == 8)) THEN
+                        quiet_bonus = quiet_bonus + 20
+                    END IF
+                END IF
+
+                IF (mover_color >= 1 .AND. mover_color <= 2 .AND. &
+                    piece_moved >= 1 .AND. piece_moved <= 6 .AND. &
+                    move_list(i)%to_sq%rank >= 1 .AND. move_list(i)%to_sq%rank <= BOARD_SIZE .AND. &
+                    move_list(i)%to_sq%file >= 1 .AND. move_list(i)%to_sq%file <= BOARD_SIZE) THEN
+                    history_score = history_table(mover_color, piece_moved, &
+                        move_list(i)%to_sq%rank, move_list(i)%to_sq%file) / 50
+                ELSE
+                    history_score = 0
+                END IF
+
+                ! Base quiet score keeps them below killers/captures but influenced by history
+                scores(i) = 1000 + quiet_bonus + history_score
             END IF
         END DO
 

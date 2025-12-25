@@ -468,13 +468,16 @@ CONTAINS
         TYPE(Board_Type), INTENT(IN) :: board
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(IN) :: num_moves
-        INTEGER :: i, j
+        INTEGER :: i, j, capped_moves
         TYPE(Move_Type) :: temp_move
-        INTEGER, DIMENSION(num_moves) :: scores
+        INTEGER, DIMENSION(MAX_MOVES) :: scores
         INTEGER :: piece_val, captured_val, temp_score
 
+        IF (num_moves <= 1) RETURN
+        capped_moves = MIN(num_moves, MAX_MOVES)
+
         ! Calculate MVV-LVA scores for captures
-        DO i = 1, num_moves
+        DO i = 1, capped_moves
             scores(i) = 0
             IF (move_list(i)%captured_piece /= NO_PIECE) THEN
                 piece_val = get_piece_order(board%squares_piece( &
@@ -485,8 +488,8 @@ CONTAINS
         END DO
 
         ! Sort moves by score (descending) using selection sort
-        DO i = 1, num_moves - 1
-            DO j = i + 1, num_moves
+        DO i = 1, capped_moves - 1
+            DO j = i + 1, capped_moves
                 IF (scores(i) < scores(j)) THEN
                     temp_move = move_list(i)
                     move_list(i) = move_list(j)

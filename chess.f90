@@ -10,6 +10,7 @@ PROGRAM Fortran_Chess
     USE Transposition_Table, ONLY: init_zobrist_keys
     USE User_Input_Processor
     USE Game_State_Checker
+    USE UCI_Driver, ONLY: run_uci_mode
     IMPLICIT NONE
 
     TYPE(Board_Type) :: game_board
@@ -22,6 +23,23 @@ PROGRAM Fortran_Chess
     TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
     INTEGER :: num_legal_moves
     INTEGER :: game_winner_color, current_game_status
+    INTEGER :: argc
+    CHARACTER(LEN=16) :: arg1
+    LOGICAL :: uci_mode
+
+    uci_mode = .FALSE.
+    argc = COMMAND_ARGUMENT_COUNT()
+    IF (argc >= 1) THEN
+        CALL GET_COMMAND_ARGUMENT(1, arg1)
+        IF (TRIM(arg1) == '--uci' .OR. TRIM(arg1) == '-uci') THEN
+            uci_mode = .TRUE.
+        END IF
+    END IF
+
+    IF (uci_mode) THEN
+        CALL run_uci_mode()
+        STOP
+    END IF
 
     search_depth = 5 ! AI Difficulty
     ! --- Player Color Selection ---
@@ -88,6 +106,14 @@ PROGRAM Fortran_Chess
 
         IF (is_human_turn) THEN
             ! --- Human's Turn ---
+            ! Generate the current legal moves before prompting the player
+            CALL generate_moves(game_board, legal_moves, num_legal_moves)
+            IF (num_legal_moves == 0) THEN
+                PRINT *, "No legal moves available."
+                game_over = .TRUE.
+                CYCLE
+            END IF
+
             move_found = get_human_move(legal_moves, num_legal_moves, chosen_move, game_over)
 
             IF (game_over) EXIT ! Exit game loop if user quit
