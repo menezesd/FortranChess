@@ -157,6 +157,57 @@ MODULE Evaluation
                            ROOK_VAL = 500, QUEEN_VAL = 900, KING_VAL = 20000
 
 CONTAINS
+
+    ! --- Get Piece Phase Value ---
+    ! Returns the phase contribution for a piece type (used for tapered eval).
+    INTEGER FUNCTION get_piece_phase(piece)
+        INTEGER, INTENT(IN) :: piece
+        SELECT CASE(piece)
+        CASE(KNIGHT); get_piece_phase = KNIGHT_PHASE
+        CASE(BISHOP); get_piece_phase = BISHOP_PHASE
+        CASE(ROOK);   get_piece_phase = ROOK_PHASE
+        CASE(QUEEN);  get_piece_phase = QUEEN_PHASE
+        CASE DEFAULT; get_piece_phase = 0
+        END SELECT
+    END FUNCTION get_piece_phase
+
+    ! --- Get Piece Evaluation Values ---
+    ! Returns material value and PST values for a given piece at a position.
+    SUBROUTINE get_piece_eval(piece, eval_rank, file, material_val, mg_pst, eg_pst)
+        INTEGER, INTENT(IN)  :: piece, eval_rank, file
+        INTEGER, INTENT(OUT) :: material_val, mg_pst, eg_pst
+
+        SELECT CASE(piece)
+        CASE(PAWN)
+            material_val = PAWN_VAL
+            mg_pst = PAWN_PST_MG(eval_rank, file)
+            eg_pst = PAWN_PST_EG(eval_rank, file)
+        CASE(KNIGHT)
+            material_val = KNIGHT_VAL
+            mg_pst = KNIGHT_PST_MG(eval_rank, file)
+            eg_pst = KNIGHT_PST_EG(eval_rank, file)
+        CASE(BISHOP)
+            material_val = BISHOP_VAL
+            mg_pst = BISHOP_PST_MG(eval_rank, file)
+            eg_pst = BISHOP_PST_EG(eval_rank, file)
+        CASE(ROOK)
+            material_val = ROOK_VAL
+            mg_pst = ROOK_PST_MG(eval_rank, file)
+            eg_pst = ROOK_PST_EG(eval_rank, file)
+        CASE(QUEEN)
+            material_val = QUEEN_VAL
+            mg_pst = QUEEN_PST_MG(eval_rank, file)
+            eg_pst = QUEEN_PST_EG(eval_rank, file)
+        CASE(KING)
+            material_val = KING_VAL
+            mg_pst = KING_PST_MG(eval_rank, file)
+            eg_pst = KING_PST_EG(eval_rank, file)
+        CASE DEFAULT
+            material_val = 0
+            mg_pst = 0
+            eg_pst = 0
+        END SELECT
+    END SUBROUTINE get_piece_eval
     ! --- Evaluate Board ---
     ! Performs static evaluation of the current board position.
     !
@@ -184,35 +235,23 @@ CONTAINS
         TYPE(Square_Type) :: sq
 
         ! --- Calculate Game Phase ---
-        ! Iterate over all pieces to determine the game phase.
         phase = 0
         DO i = 1, board%num_white_pieces
             sq = board%white_pieces(i)
             piece = board%squares_piece(sq%rank, sq%file)
-            SELECT CASE(piece)
-            CASE(KNIGHT); phase = phase + KNIGHT_PHASE
-            CASE(BISHOP); phase = phase + BISHOP_PHASE
-            CASE(ROOK);   phase = phase + ROOK_PHASE
-            CASE(QUEEN);  phase = phase + QUEEN_PHASE
-            END SELECT
+            phase = phase + get_piece_phase(piece)
         END DO
         DO i = 1, board%num_black_pieces
             sq = board%black_pieces(i)
             piece = board%squares_piece(sq%rank, sq%file)
-            SELECT CASE(piece)
-            CASE(KNIGHT); phase = phase + KNIGHT_PHASE
-            CASE(BISHOP); phase = phase + BISHOP_PHASE
-            CASE(ROOK);   phase = phase + ROOK_PHASE
-            CASE(QUEEN);  phase = phase + QUEEN_PHASE
-            END SELECT
+            phase = phase + get_piece_phase(piece)
         END DO
-        ! Clamp phase to be within the valid range [0, TOTAL_PHASE]
         phase = MIN(phase, TOTAL_PHASE)
 
         ! --- Evaluate Pieces ---
         evaluate_board = 0
 
-        ! Evaluate white pieces using piece list
+        ! Evaluate white pieces
         DO i = 1, board%num_white_pieces
             sq = board%white_pieces(i)
             r = sq%rank
@@ -220,45 +259,12 @@ CONTAINS
             piece = board%squares_piece(r, f)
             eval_rank = r  ! White: rank 1-8 as-is
 
-            ! Get material value and positional bonus
-            SELECT CASE(piece)
-            CASE(PAWN)
-                piece_value = PAWN_VAL
-                mg_pst_val = PAWN_PST_MG(eval_rank, f)
-                eg_pst_val = PAWN_PST_EG(eval_rank, f)
-            CASE(KNIGHT)
-                piece_value = KNIGHT_VAL
-                mg_pst_val = KNIGHT_PST_MG(eval_rank, f)
-                eg_pst_val = KNIGHT_PST_EG(eval_rank, f)
-            CASE(BISHOP)
-                piece_value = BISHOP_VAL
-                mg_pst_val = BISHOP_PST_MG(eval_rank, f)
-                eg_pst_val = BISHOP_PST_EG(eval_rank, f)
-            CASE(ROOK)
-                piece_value = ROOK_VAL
-                mg_pst_val = ROOK_PST_MG(eval_rank, f)
-                eg_pst_val = ROOK_PST_EG(eval_rank, f)
-            CASE(QUEEN)
-                piece_value = QUEEN_VAL
-                mg_pst_val = QUEEN_PST_MG(eval_rank, f)
-                eg_pst_val = QUEEN_PST_EG(eval_rank, f)
-            CASE(KING)
-                piece_value = KING_VAL
-                mg_pst_val = KING_PST_MG(eval_rank, f)
-                eg_pst_val = KING_PST_EG(eval_rank, f)
-            CASE DEFAULT
-                piece_value = 0
-                mg_pst_val = 0
-                eg_pst_val = 0
-            END SELECT
-
-            ! Tapered PST value
+            CALL get_piece_eval(piece, eval_rank, f, piece_value, mg_pst_val, eg_pst_val)
             pst_value = ((mg_pst_val * phase) + (eg_pst_val * (TOTAL_PHASE - phase))) / TOTAL_PHASE
-
             evaluate_board = evaluate_board + piece_value + pst_value
         END DO
 
-        ! Evaluate black pieces using piece list
+        ! Evaluate black pieces
         DO i = 1, board%num_black_pieces
             sq = board%black_pieces(i)
             r = sq%rank
@@ -266,46 +272,12 @@ CONTAINS
             piece = board%squares_piece(r, f)
             eval_rank = BOARD_SIZE - r + 1  ! Black: flip ranks (8->1, 1->8)
 
-            ! Get material value and positional bonus
-            SELECT CASE(piece)
-            CASE(PAWN)
-                piece_value = PAWN_VAL
-                mg_pst_val = PAWN_PST_MG(eval_rank, f)
-                eg_pst_val = PAWN_PST_EG(eval_rank, f)
-            CASE(KNIGHT)
-                piece_value = KNIGHT_VAL
-                mg_pst_val = KNIGHT_PST_MG(eval_rank, f)
-                eg_pst_val = KNIGHT_PST_EG(eval_rank, f)
-            CASE(BISHOP)
-                piece_value = BISHOP_VAL
-                mg_pst_val = BISHOP_PST_MG(eval_rank, f)
-                eg_pst_val = BISHOP_PST_EG(eval_rank, f)
-            CASE(ROOK)
-                piece_value = ROOK_VAL
-                mg_pst_val = ROOK_PST_MG(eval_rank, f)
-                eg_pst_val = ROOK_PST_EG(eval_rank, f)
-            CASE(QUEEN)
-                piece_value = QUEEN_VAL
-                mg_pst_val = QUEEN_PST_MG(eval_rank, f)
-                eg_pst_val = QUEEN_PST_EG(eval_rank, f)
-            CASE(KING)
-                piece_value = KING_VAL
-                mg_pst_val = KING_PST_MG(eval_rank, f)
-                eg_pst_val = KING_PST_EG(eval_rank, f)
-            CASE DEFAULT
-                piece_value = 0
-                mg_pst_val = 0
-                eg_pst_val = 0
-            END SELECT
-
-            ! Tapered PST value
+            CALL get_piece_eval(piece, eval_rank, f, piece_value, mg_pst_val, eg_pst_val)
             pst_value = ((mg_pst_val * phase) + (eg_pst_val * (TOTAL_PHASE - phase))) / TOTAL_PHASE
-
             evaluate_board = evaluate_board - (piece_value + pst_value)
         END DO
 
         ! Adjust score relative to current player
-        ! (positive = current player advantage, negative = opponent advantage)
         IF (board%current_player == BLACK) THEN
             evaluate_board = -evaluate_board
         END IF

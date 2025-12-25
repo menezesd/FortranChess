@@ -184,8 +184,7 @@ CONTAINS
 
         ! 6. Update piece lists
         CALL update_piece_lists(board, from_sq, to_sq, unmake_info%captured_sq, &
-                               unmake_info%captured_piece_type, unmake_info%captured_piece_color, &
-                               move%promotion_piece)
+                               unmake_info%captured_piece_type, unmake_info%captured_piece_color)
 
     END SUBROUTINE make_move
 
