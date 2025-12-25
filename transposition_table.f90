@@ -9,7 +9,8 @@ MODULE Transposition_Table
 
     PUBLIC :: init_zobrist_keys, compute_zobrist_hash, store_tt_entry, probe_tt, &
               TT_Entry_Type, HASH_FLAG_EXACT, HASH_FLAG_ALPHA, HASH_FLAG_BETA, &
-              ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE, tt
+              ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE, tt, &
+              new_search_generation
 
     ! --- Transposition Table Constants ---
     INTEGER, PARAMETER :: HASH_FLAG_EXACT = 0
@@ -29,11 +30,16 @@ MODULE Transposition_Table
         INTEGER         :: depth = 0    ! Search depth for this entry
         INTEGER         :: score = 0    ! Score from evaluation
         INTEGER         :: flag = 0     ! EXACT, ALPHA, or BETA
-        TYPE(Move_Type) :: best_move  ! Best move found
+        INTEGER         :: age = 0      ! Search generation when stored
+        TYPE(Move_Type) :: best_move    ! Best move found
     END TYPE TT_Entry_Type
 
     ! --- The Transposition Table ---
     TYPE(TT_Entry_Type), DIMENSION(TT_SIZE) :: tt
+
+    ! --- Search Generation Counter ---
+    ! Incremented each time a new search starts, used for aging entries
+    INTEGER :: tt_generation = 0
 
 CONTAINS
 
@@ -120,21 +126,48 @@ CONTAINS
 
     END FUNCTION compute_zobrist_hash
 
+    ! --- Increment Search Generation ---
+    ! Called at the start of each new search to age TT entries
+    SUBROUTINE new_search_generation()
+        tt_generation = tt_generation + 1
+    END SUBROUTINE new_search_generation
+
     ! --- Store an entry in the TT ---
+    ! Uses a depth-preferred replacement strategy with age consideration
     SUBROUTINE store_tt_entry(hash_key, depth, score, flag, best_move)
         INTEGER(KIND=8), INTENT(IN) :: hash_key
         INTEGER, INTENT(IN) :: depth, score, flag
         TYPE(Move_Type), INTENT(IN) :: best_move
         INTEGER(KIND=8) :: index
+        LOGICAL :: should_replace
 
         index = IAND(hash_key, INT(TT_SIZE - 1, KIND=8)) + 1
-        
-        ! Always replace scheme (can be improved with depth/age checks)
-        tt(index)%key = hash_key
-        tt(index)%depth = depth
-        tt(index)%score = score
-        tt(index)%flag = flag
-        tt(index)%best_move = best_move
+
+        ! Determine if we should replace the existing entry
+        should_replace = .FALSE.
+
+        IF (tt(index)%key == 0) THEN
+            ! Empty slot - always replace
+            should_replace = .TRUE.
+        ELSE IF (tt(index)%key == hash_key) THEN
+            ! Same position - replace if new entry is deeper or same depth
+            should_replace = (depth >= tt(index)%depth)
+        ELSE IF (tt(index)%age /= tt_generation) THEN
+            ! Entry is from a previous search - replace
+            should_replace = .TRUE.
+        ELSE IF (depth >= tt(index)%depth) THEN
+            ! Different position, same generation, but new entry is deeper
+            should_replace = .TRUE.
+        END IF
+
+        IF (should_replace) THEN
+            tt(index)%key = hash_key
+            tt(index)%depth = depth
+            tt(index)%score = score
+            tt(index)%flag = flag
+            tt(index)%age = tt_generation
+            tt(index)%best_move = best_move
+        END IF
     END SUBROUTINE store_tt_entry
 
     ! --- Probe the TT for an entry ---

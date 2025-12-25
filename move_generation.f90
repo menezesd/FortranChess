@@ -473,39 +473,29 @@ CONTAINS
         INTEGER :: i, j
         TYPE(Move_Type) :: temp_move
         INTEGER, DIMENSION(num_moves) :: scores
-        INTEGER :: piece_val, captured_val
+        INTEGER :: piece_val, captured_val, temp_score
 
+        ! Calculate MVV-LVA scores for captures
         DO i = 1, num_moves
             scores(i) = 0
             IF (move_list(i)%captured_piece /= NO_PIECE) THEN
-                SELECT CASE (board%squares_piece(move_list(i)%from_sq%rank, move_list(i)%from_sq%file))
-                    CASE(PAWN); piece_val = 1
-                    CASE(KNIGHT); piece_val = 2
-                    CASE(BISHOP); piece_val = 3
-                    CASE(ROOK); piece_val = 4
-                    CASE(QUEEN); piece_val = 5
-                    CASE(KING); piece_val = 6
-                    CASE DEFAULT; piece_val = 0
-                END SELECT
-                SELECT CASE (move_list(i)%captured_piece)
-                    CASE(PAWN); captured_val = 10
-                    CASE(KNIGHT); captured_val = 20
-                    CASE(BISHOP); captured_val = 30
-                    CASE(ROOK); captured_val = 40
-                    CASE(QUEEN); captured_val = 50
-                    CASE(KING); captured_val = 60
-                    CASE DEFAULT; captured_val = 0
-                END SELECT
+                piece_val = get_piece_order(board%squares_piece( &
+                    move_list(i)%from_sq%rank, move_list(i)%from_sq%file))
+                captured_val = get_piece_order(move_list(i)%captured_piece) * 10
                 scores(i) = captured_val - piece_val
             END IF
         END DO
 
+        ! Sort moves by score (descending) using selection sort
         DO i = 1, num_moves - 1
             DO j = i + 1, num_moves
                 IF (scores(i) < scores(j)) THEN
                     temp_move = move_list(i)
                     move_list(i) = move_list(j)
                     move_list(j) = temp_move
+                    temp_score = scores(i)
+                    scores(i) = scores(j)
+                    scores(j) = temp_score
                 END IF
             END DO
         END DO

@@ -84,4 +84,28 @@ MODULE Chess_Types
         INTEGER(KIND=8) :: zobrist_key = 0
     END TYPE Board_Type
 
+CONTAINS
+
+    ! --- Get Piece Order Value for MVV-LVA ---
+    ! Returns a relative ordering value for pieces (used in move ordering).
+    ! Lower values for less valuable pieces (attacker), higher for more valuable (victim).
+    !
+    ! Parameters:
+    !   piece (IN): Piece type constant
+    !
+    ! Returns:
+    !   Order value (1=Pawn, 2=Knight, 3=Bishop, 4=Rook, 5=Queen, 6=King)
+    INTEGER FUNCTION get_piece_order(piece)
+        INTEGER, INTENT(IN) :: piece
+        SELECT CASE(piece)
+        CASE(PAWN);   get_piece_order = 1
+        CASE(KNIGHT); get_piece_order = 2
+        CASE(BISHOP); get_piece_order = 3
+        CASE(ROOK);   get_piece_order = 4
+        CASE(QUEEN);  get_piece_order = 5
+        CASE(KING);   get_piece_order = 6
+        CASE DEFAULT; get_piece_order = 0
+        END SELECT
+    END FUNCTION get_piece_order
+
 END MODULE Chess_Types

@@ -11,7 +11,8 @@ MODULE Board_Utils
               sq_is_valid, char_to_file, char_to_rank, &
               file_rank_to_sq, is_square_attacked, &
               find_king, is_in_check, update_piece_lists, &
-              update_piece_lists_unmake
+              update_piece_lists_unmake, remove_from_piece_list, &
+              update_piece_position, add_to_piece_list
 
 CONTAINS
 
@@ -19,15 +20,28 @@ CONTAINS
     ! Converts algebraic chess notation file character to array index.
     !
     ! Parameters:
-    !   file_char (IN): Character 'a' through 'h'
+    !   file_char (IN): Character 'a' through 'h' (case insensitive)
     !
     ! Returns:
     !   Integer 1-8 corresponding to file (a=1, b=2, ..., h=8)
-    !
-    ! Note: No error checking - assumes valid input
+    !   Returns -1 if the input is invalid
     INTEGER FUNCTION char_to_file(file_char)
         CHARACTER(LEN=1), INTENT(IN) :: file_char
-        char_to_file = ICHAR(file_char) - ICHAR('a') + 1
+        CHARACTER(LEN=1) :: lower_char
+
+        ! Convert to lowercase for case-insensitive comparison
+        IF (file_char >= 'A' .AND. file_char <= 'H') THEN
+            lower_char = ACHAR(IACHAR(file_char) + 32)
+        ELSE
+            lower_char = file_char
+        END IF
+
+        ! Validate input
+        IF (lower_char >= 'a' .AND. lower_char <= 'h') THEN
+            char_to_file = ICHAR(lower_char) - ICHAR('a') + 1
+        ELSE
+            char_to_file = -1  ! Invalid input
+        END IF
     END FUNCTION char_to_file
 
     ! --- Function to convert rank char ('1'-'8') to index (1-8) ---
@@ -38,13 +52,22 @@ CONTAINS
     !
     ! Returns:
     !   Integer 1-8 corresponding to rank (1=1, 2=2, ..., 8=8)
-    !
-    ! Note: Uses internal read for conversion, basic error handling via IOSTAT
+    !   Returns -1 if the input is invalid
     INTEGER FUNCTION char_to_rank(rank_char)
         CHARACTER(LEN=1), INTENT(IN) :: rank_char
-        INTEGER :: ierr
-        READ (rank_char, '(I1)', IOSTAT=ierr) char_to_rank
-        ! Basic error check could be added
+        INTEGER :: ierr, result
+
+        ! Validate input is a digit
+        IF (rank_char >= '1' .AND. rank_char <= '8') THEN
+            READ (rank_char, '(I1)', IOSTAT=ierr) result
+            IF (ierr == 0) THEN
+                char_to_rank = result
+            ELSE
+                char_to_rank = -1  ! Read error
+            END IF
+        ELSE
+            char_to_rank = -1  ! Invalid input
+        END IF
     END FUNCTION char_to_rank
 
     ! --- Subroutine to create a Square_Type ---
@@ -348,6 +371,100 @@ CONTAINS
 
     END FUNCTION is_square_attacked
 
+    ! --- Remove a piece from a piece list ---
+    ! Removes a piece at the given square from the appropriate piece list.
+    !
+    ! Parameters:
+    !   board (INOUT): Board state with piece lists to modify
+    !   sq (IN): Square of the piece to remove
+    !   color (IN): Color of the piece to remove (WHITE or BLACK)
+    !
+    ! Returns:
+    !   True if the piece was found and removed, false otherwise
+    LOGICAL FUNCTION remove_from_piece_list(board, sq, color)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        TYPE(Square_Type), INTENT(IN) :: sq
+        INTEGER, INTENT(IN) :: color
+        INTEGER :: i
+
+        remove_from_piece_list = .FALSE.
+        IF (color == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                IF (board%white_pieces(i)%rank == sq%rank .AND. &
+                    board%white_pieces(i)%file == sq%file) THEN
+                    board%white_pieces(i) = board%white_pieces(board%num_white_pieces)
+                    board%num_white_pieces = board%num_white_pieces - 1
+                    remove_from_piece_list = .TRUE.
+                    RETURN
+                END IF
+            END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                IF (board%black_pieces(i)%rank == sq%rank .AND. &
+                    board%black_pieces(i)%file == sq%file) THEN
+                    board%black_pieces(i) = board%black_pieces(board%num_black_pieces)
+                    board%num_black_pieces = board%num_black_pieces - 1
+                    remove_from_piece_list = .TRUE.
+                    RETURN
+                END IF
+            END DO
+        END IF
+    END FUNCTION remove_from_piece_list
+
+    ! --- Update a piece position in a piece list ---
+    ! Moves a piece from one square to another in the appropriate piece list.
+    !
+    ! Parameters:
+    !   board (INOUT): Board state with piece lists to modify
+    !   from_sq (IN): Original square of the piece
+    !   to_sq (IN): New square for the piece
+    !   color (IN): Color of the piece to update (WHITE or BLACK)
+    SUBROUTINE update_piece_position(board, from_sq, to_sq, color)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq
+        INTEGER, INTENT(IN) :: color
+        INTEGER :: i
+
+        IF (color == WHITE) THEN
+            DO i = 1, board%num_white_pieces
+                IF (board%white_pieces(i)%rank == from_sq%rank .AND. &
+                    board%white_pieces(i)%file == from_sq%file) THEN
+                    board%white_pieces(i) = to_sq
+                    RETURN
+                END IF
+            END DO
+        ELSE
+            DO i = 1, board%num_black_pieces
+                IF (board%black_pieces(i)%rank == from_sq%rank .AND. &
+                    board%black_pieces(i)%file == from_sq%file) THEN
+                    board%black_pieces(i) = to_sq
+                    RETURN
+                END IF
+            END DO
+        END IF
+    END SUBROUTINE update_piece_position
+
+    ! --- Add a piece to a piece list ---
+    ! Adds a piece at the given square to the appropriate piece list.
+    !
+    ! Parameters:
+    !   board (INOUT): Board state with piece lists to modify
+    !   sq (IN): Square of the piece to add
+    !   color (IN): Color of the piece to add (WHITE or BLACK)
+    SUBROUTINE add_to_piece_list(board, sq, color)
+        TYPE(Board_Type), INTENT(INOUT) :: board
+        TYPE(Square_Type), INTENT(IN) :: sq
+        INTEGER, INTENT(IN) :: color
+
+        IF (color == WHITE) THEN
+            board%num_white_pieces = board%num_white_pieces + 1
+            board%white_pieces(board%num_white_pieces) = sq
+        ELSE
+            board%num_black_pieces = board%num_black_pieces + 1
+            board%black_pieces(board%num_black_pieces) = sq
+        END IF
+    END SUBROUTINE add_to_piece_list
+
     ! --- Check if the king of 'player_color' is in check ---
     LOGICAL FUNCTION is_in_check(board, player_color)
         TYPE(Board_Type), INTENT(IN) :: board
@@ -383,76 +500,29 @@ CONTAINS
     !   captured_sq (IN): Square where capture occurred (if any)
     !   captured_piece (IN): Type of piece captured (NO_PIECE if none)
     !   captured_color (IN): Color of piece captured
-    !   promotion_piece (IN): New piece type if promotion occurred
+
     !
     ! Side effects:
     !   Modifies piece list arrays and counts
     !   Assumes board squares have already been updated
-    SUBROUTINE update_piece_lists(board, from_sq, to_sq, captured_sq, captured_piece, captured_color, promotion_piece)
+    SUBROUTINE update_piece_lists(board, from_sq, to_sq, captured_sq, captured_piece, captured_color)
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq
         TYPE(Square_Type), INTENT(IN) :: captured_sq
-        INTEGER, INTENT(IN) :: captured_piece, captured_color, promotion_piece
+        INTEGER, INTENT(IN) :: captured_piece, captured_color
 
-        INTEGER :: i, piece_moved, color_moved
-        LOGICAL :: found
+        INTEGER :: color_moved
+        LOGICAL :: dummy
 
-        ! This is incorrect, the piece has already been moved on the board
-        ! piece_moved = board%squares_piece(from_sq%rank, from_sq%file)
-        ! color_moved = board%squares_color(from_sq%rank, from_sq%file)
-        piece_moved = board%squares_piece(to_sq%rank, to_sq%file)
         color_moved = get_opponent_color(board%current_player)
 
         ! Remove captured piece from opponent's list if any
         IF (captured_piece /= NO_PIECE) THEN
-            IF (captured_color == WHITE) THEN
-                found = .FALSE.
-                DO i = 1, board%num_white_pieces
-                    IF (board%white_pieces(i)%rank == captured_sq%rank .AND. &
-                        board%white_pieces(i)%file == captured_sq%file) THEN
-                        board%white_pieces(i) = board%white_pieces(board%num_white_pieces)
-                        board%num_white_pieces = board%num_white_pieces - 1
-                        found = .TRUE.
-                        EXIT
-                    END IF
-                END DO
-            ELSE
-                found = .FALSE.
-                DO i = 1, board%num_black_pieces
-                    IF (board%black_pieces(i)%rank == captured_sq%rank .AND. &
-                        board%black_pieces(i)%file == captured_sq%file) THEN
-                        board%black_pieces(i) = board%black_pieces(board%num_black_pieces)
-                        board%num_black_pieces = board%num_black_pieces - 1
-                        found = .TRUE.
-                        EXIT
-                    END IF
-                END DO
-            END IF
+            dummy = remove_from_piece_list(board, captured_sq, captured_color)
         END IF
 
         ! Update moving piece's position
-        IF (color_moved == WHITE) THEN
-            DO i = 1, board%num_white_pieces
-                IF (board%white_pieces(i)%rank == from_sq%rank .AND. &
-                    board%white_pieces(i)%file == from_sq%file) THEN
-                    board%white_pieces(i) = to_sq
-                    EXIT
-                END IF
-            END DO
-        ELSE
-            DO i = 1, board%num_black_pieces
-                IF (board%black_pieces(i)%rank == from_sq%rank .AND. &
-                    board%black_pieces(i)%file == from_sq%file) THEN
-                    board%black_pieces(i) = to_sq
-                    EXIT
-                END IF
-            END DO
-        END IF
-
-        ! Handle promotion (pawn becomes another piece)
-        IF (promotion_piece /= NO_PIECE) THEN
-            ! Piece type already updated in board, list position is correct
-        END IF
+        CALL update_piece_position(board, from_sq, to_sq, color_moved)
 
     END SUBROUTINE update_piece_lists
 
@@ -481,36 +551,12 @@ CONTAINS
         TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq, captured_sq
         INTEGER, INTENT(IN) :: captured_piece, captured_color
 
-        INTEGER :: i
-
         ! Move piece back to from_sq
-        IF (board%current_player == WHITE) THEN
-            DO i = 1, board%num_white_pieces
-                IF (board%white_pieces(i)%rank == to_sq%rank .AND. &
-                    board%white_pieces(i)%file == to_sq%file) THEN
-                    board%white_pieces(i) = from_sq
-                    EXIT
-                END IF
-            END DO
-        ELSE
-            DO i = 1, board%num_black_pieces
-                IF (board%black_pieces(i)%rank == to_sq%rank .AND. &
-                    board%black_pieces(i)%file == to_sq%file) THEN
-                    board%black_pieces(i) = from_sq
-                    EXIT
-                END IF
-            END DO
-        END IF
+        CALL update_piece_position(board, to_sq, from_sq, board%current_player)
 
         ! Restore captured piece if any
         IF (captured_piece /= NO_PIECE) THEN
-            IF (captured_color == WHITE) THEN
-                board%num_white_pieces = board%num_white_pieces + 1
-                board%white_pieces(board%num_white_pieces) = captured_sq
-            ELSE
-                board%num_black_pieces = board%num_black_pieces + 1
-                board%black_pieces(board%num_black_pieces) = captured_sq
-            END IF
+            CALL add_to_piece_list(board, captured_sq, captured_color)
         END IF
 
     END SUBROUTINE update_piece_lists_unmake
