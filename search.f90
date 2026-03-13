@@ -8,6 +8,7 @@ MODULE Search
     USE Move_Generation, ONLY: generate_moves, generate_captures, order_moves
     USE Make_Unmake
     USE Evaluation
+    USE Search_Control, ONLY: poll_search_stop, search_stop_requested
     USE Transposition_Table, ONLY: probe_tt, store_tt_entry, TT_Entry_Type, &
         HASH_FLAG_EXACT, HASH_FLAG_ALPHA, HASH_FLAG_BETA, new_search_generation, &
         ZOBRIST_BLACK_TO_MOVE, ZOBRIST_EP_FILE
@@ -31,29 +32,50 @@ CONTAINS
         INTEGER, INTENT(IN) :: alpha, beta
 
         INTEGER :: stand_pat, current_alpha, i
-        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: captures
-        INTEGER :: num_captures
+        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
+        INTEGER :: num_moves
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
+        LOGICAL :: in_check
 
-        current_alpha = alpha
-
-        stand_pat = evaluate_board(board)
-
-        IF (stand_pat >= beta) THEN
-            score = beta
+        IF (poll_search_stop()) THEN
+            score = 0
             RETURN
         END IF
 
-        IF (current_alpha < stand_pat) THEN
-            current_alpha = stand_pat
+        IF (is_fifty_move_draw(board) .OR. is_threefold_repetition(board)) THEN
+            score = 0
+            RETURN
         END IF
 
-        CALL generate_captures(board, captures, num_captures)
-        CALL order_moves(board, captures, num_captures) ! NEW: Order captures in quiescence search
+        current_alpha = alpha
+        in_check = is_in_check(board, board%current_player)
 
-        DO i = 1, num_captures
-            current_move = captures(i)
+        IF (.NOT. in_check) THEN
+            stand_pat = evaluate_board(board)
+
+            IF (stand_pat >= beta) THEN
+                score = beta
+                RETURN
+            END IF
+
+            IF (current_alpha < stand_pat) THEN
+                current_alpha = stand_pat
+            END IF
+
+            CALL generate_captures(board, moves, num_moves)
+        ELSE
+            CALL generate_moves(board, moves, num_moves)
+            IF (num_moves == 0) THEN
+                score = -MATE_SCORE
+                RETURN
+            END IF
+        END IF
+
+        CALL order_moves(board, moves, num_moves)
+
+        DO i = 1, num_moves
+            current_move = moves(i)
             CALL make_move(board, current_move, unmake_info)
             score = -quiescence(board, -beta, -current_alpha)
             CALL unmake_move(board, current_move, unmake_info)
@@ -100,7 +122,7 @@ CONTAINS
         INTEGER, INTENT(IN) :: depth_param ! Original depth (input only)
         INTEGER, INTENT(IN) :: ply
         INTEGER, INTENT(INOUT) :: alpha, beta ! alpha and beta are modified by TT lookups
-        INTEGER :: score, current_alpha = -INF, next_alpha, next_beta
+        INTEGER :: score, current_alpha, next_alpha, next_beta, original_alpha
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves, i
         TYPE(Move_Type) :: current_move, best_move_here
@@ -113,26 +135,42 @@ CONTAINS
         LOGICAL :: prev_ep_present
         TYPE(Square_Type) :: prev_ep_sq
         INTEGER(KIND=8) :: prev_key
+        INTEGER :: prev_halfmove_clock, prev_fullmove_number, prev_repetition_count
+        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: prev_repetition_history
         INTEGER :: current_depth ! Local variable for depth, can be modified
 
         current_depth = depth_param
 
-        ! --- Transposition Table Lookup ---
-        tt_hit = probe_tt(board%zobrist_key, depth_param, alpha, beta, tt_entry)
-        IF (tt_hit) THEN
-            best_score = tt_entry%score
+        IF (poll_search_stop()) THEN
+            best_score = 0
             RETURN
         END IF
 
-        ! Base case: evaluate position when search depth is reached
-        IF (current_depth <= 0) THEN
-            best_score = quiescence(board, alpha, beta)
+        IF (is_fifty_move_draw(board) .OR. is_threefold_repetition(board)) THEN
+            best_score = 0
+            RETURN
+        END IF
+
+        original_alpha = alpha
+        current_alpha = alpha
+
+        ! --- Transposition Table Lookup ---
+        tt_hit = probe_tt(board%zobrist_key, depth_param, ply, alpha, beta, tt_entry)
+        current_alpha = alpha
+        IF (tt_hit) THEN
+            best_score = tt_entry%score
             RETURN
         END IF
 
         in_check = is_in_check(board, board%current_player)
         IF (in_check) THEN
             current_depth = current_depth + 1
+        END IF
+
+        ! Base case: evaluate position when search depth is reached
+        IF (current_depth <= 0) THEN
+            best_score = quiescence(board, alpha, beta)
+            RETURN
         END IF
 
         ! --- Null Move Pruning (NMP) ---
@@ -144,13 +182,27 @@ CONTAINS
             prev_key = board%zobrist_key
             prev_ep_present = board%ep_target_present
             prev_ep_sq = board%ep_target_sq
+            prev_halfmove_clock = board%halfmove_clock
+            prev_fullmove_number = board%fullmove_number
+            prev_repetition_count = board%repetition_count
+            prev_repetition_history = board%repetition_history
 
+            board%halfmove_clock = board%halfmove_clock + 1
+            IF (board%current_player == BLACK) THEN
+                board%fullmove_number = board%fullmove_number + 1
+            END IF
             board%current_player = get_opponent_color(board%current_player)
             board%zobrist_key = IEOR(board%zobrist_key, ZOBRIST_BLACK_TO_MOVE)
             IF (board%ep_target_present) THEN
                 board%zobrist_key = IEOR(board%zobrist_key, ZOBRIST_EP_FILE(board%ep_target_sq%file))
                 board%ep_target_present = .FALSE.
             END IF
+            IF (board%repetition_count < MAX_GAME_HISTORY) THEN
+                board%repetition_count = board%repetition_count + 1
+            ELSE
+                board%repetition_history(1:MAX_GAME_HISTORY-1) = board%repetition_history(2:MAX_GAME_HISTORY)
+            END IF
+            board%repetition_history(board%repetition_count) = board%zobrist_key
 
             ! Search with reduced depth and a null window
             next_beta = -beta
@@ -162,6 +214,10 @@ CONTAINS
             board%ep_target_present = prev_ep_present
             board%ep_target_sq = prev_ep_sq
             board%zobrist_key = prev_key
+            board%halfmove_clock = prev_halfmove_clock
+            board%fullmove_number = prev_fullmove_number
+            board%repetition_count = prev_repetition_count
+            board%repetition_history = prev_repetition_history
 
             ! If the null move search causes a beta cutoff, we can prune this node
             IF (score >= beta) THEN
@@ -176,9 +232,8 @@ CONTAINS
         ! Check for terminal positions (checkmate/stalemate) after move generation
         IF (num_moves == 0) THEN
              IF (in_check) THEN
-                 ! Checkmate: current player loses, score decreases with depth
-                 ! (prefer faster mates)
-                 best_score = -MATE_SCORE + (10 - current_depth)
+                 ! Checkmate: current player loses; use ply so mate distance is stable.
+                 best_score = -MATE_SCORE + ply
              ELSE
                  ! Stalemate: draw
                  best_score = 0
@@ -187,7 +242,7 @@ CONTAINS
         END IF
 
         ! --- TT Best Move Ordering ---
-        IF (tt_hit .AND. tt_entry%best_move%from_sq%rank /= 0) THEN ! Check if TT entry has a valid best move
+        IF (tt_entry%best_move%from_sq%rank /= 0) THEN
             DO i = 1, num_moves
                 IF (moves_equal(moves(i), tt_entry%best_move)) THEN
                     current_move = moves(1)
@@ -207,6 +262,7 @@ CONTAINS
 
         ! Evaluate each possible move
         DO i = 1, num_moves
+            IF (poll_search_stop()) EXIT
             current_move = moves(i)
 
             ! Make the move on the board
@@ -235,7 +291,7 @@ CONTAINS
             ! Alpha-beta pruning: if current best score is better than
             ! what opponent can force, stop searching this branch
             IF (current_alpha >= beta) THEN
-                 CALL store_tt_entry(board%zobrist_key, depth_param, beta, HASH_FLAG_BETA, moves(i))
+                 CALL store_tt_entry(board%zobrist_key, depth_param, beta, HASH_FLAG_ALPHA, moves(i), ply)
                  ! Store killer move if it's a quiet move (now using external module)
                  CALL store_killer(current_move, ply)
                  IF (current_move%captured_piece == NO_PIECE .AND. &
@@ -248,12 +304,16 @@ CONTAINS
             END IF
         END DO
 
+        IF (search_stop_requested()) THEN
+            RETURN
+        END IF
+
         ! --- Store result in Transposition Table ---
         IF (best_move_here%from_sq%rank /= 0) THEN
-            IF (best_score <= alpha) THEN ! Upper bound
-                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_ALPHA, best_move_here)
+            IF (best_score <= original_alpha) THEN ! Upper bound
+                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_BETA, best_move_here, ply)
             ELSE ! Exact score
-                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_EXACT, best_move_here)
+                CALL store_tt_entry(board%zobrist_key, depth_param, best_score, HASH_FLAG_EXACT, best_move_here, ply)
             END IF
         END IF
 
@@ -276,15 +336,18 @@ CONTAINS
     ! Side effects:
     !   Temporarily modifies the board during search (restored via make/unmake)
     !   May take significant time for deep searches
-    SUBROUTINE find_best_move(board, max_depth, best_move_found, best_move, best_score_out)
+    SUBROUTINE find_best_move(board, max_depth, best_move_found, best_move, best_score_out, completed_depth_out, root_moves_in, root_num_moves_in)
         TYPE(Board_Type), INTENT(INOUT) :: board
         INTEGER, INTENT(IN) :: max_depth
         LOGICAL, INTENT(OUT) :: best_move_found
         TYPE(Move_Type), INTENT(OUT) :: best_move
         INTEGER, INTENT(OUT), OPTIONAL :: best_score_out
+        INTEGER, INTENT(OUT), OPTIONAL :: completed_depth_out
+        TYPE(Move_Type), DIMENSION(MAX_MOVES), INTENT(IN), OPTIONAL :: root_moves_in
+        INTEGER, INTENT(IN), OPTIONAL :: root_num_moves_in
 
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
-        INTEGER :: num_moves, i, d
+        INTEGER :: num_moves, i, d, target_depth
         INTEGER :: score, best_score_so_far, alpha, beta, next_alpha, next_beta
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
@@ -292,10 +355,14 @@ CONTAINS
         LOGICAL :: research_needed
         INTEGER :: last_iteration_score
         INTEGER :: start_count, count_rate
+        INTEGER :: completed_depth
+        TYPE(Move_Type) :: iteration_best_move
+        LOGICAL :: iteration_found, iteration_completed
 
         best_move_found = .FALSE.
         best_score_so_far = -INF
         last_iteration_score = 0 ! Initialize
+        completed_depth = 0
         CALL SYSTEM_CLOCK(start_count, count_rate)
 
         ! Aspiration window delta
@@ -306,17 +373,41 @@ CONTAINS
         CALL clear_history()
         CALL new_search_generation()
 
-        ! Generate legal moves at the root
-        CALL generate_moves(board, moves, num_moves)
+        IF (is_fifty_move_draw(board) .OR. is_threefold_repetition(board)) THEN
+            best_move_found = .FALSE.
+            IF (PRESENT(best_score_out)) best_score_out = 0
+            IF (PRESENT(completed_depth_out)) completed_depth_out = 0
+            RETURN
+        END IF
+
+        ! Generate legal moves at the root, or use caller-provided root restriction.
+        IF (PRESENT(root_moves_in) .AND. PRESENT(root_num_moves_in)) THEN
+            num_moves = root_num_moves_in
+            IF (num_moves > 0) moves(1:num_moves) = root_moves_in(1:num_moves)
+        ELSE
+            CALL generate_moves(board, moves, num_moves)
+        END IF
 
         ! No legal moves available
         IF (num_moves == 0) THEN
+             IF (PRESENT(completed_depth_out)) completed_depth_out = 0
              RETURN
         END IF
 
+        best_move = moves(1)
+        best_move_found = .TRUE.
+
+        IF (max_depth > 0) THEN
+            target_depth = max_depth
+        ELSE
+            target_depth = MAX_DEPTH
+        END IF
+
         ! Iterative Deepening Loop
-        DO d = 1, max_depth
+        d = 1
+        DO WHILE (d <= target_depth)
             research_needed = .TRUE.
+            iteration_completed = .FALSE.
             DO WHILE (research_needed)
                 research_needed = .FALSE. ! Assume no re-search needed unless bounds fail
 
@@ -334,9 +425,11 @@ CONTAINS
                 
                 ! Re-initialize best score for the current search (may be part of a re-search)
                 best_score_so_far = -INF
+                iteration_found = .FALSE.
                 
                 ! Evaluate each possible move at the current depth
                 DO i = 1, num_moves
+                    IF (poll_search_stop()) EXIT
                     current_move = moves(i)
 
                     ! Make the move
@@ -353,8 +446,8 @@ CONTAINS
                     ! Check if this move is better than previous best for this iteration
                     IF (score > best_score_so_far) THEN
                          best_score_so_far = score
-                         best_move = current_move
-                         best_move_found = .TRUE.
+                         iteration_best_move = current_move
+                         iteration_found = .TRUE.
                     END IF
 
                     ! Update alpha for root node
@@ -362,6 +455,8 @@ CONTAINS
                          alpha = best_score_so_far
                     END IF
                 END DO
+
+                IF (search_stop_requested()) EXIT
 
                 ! --- Check Aspiration Window Failure ---
                 IF (d /= 1) THEN ! Only check for aspiration failures after first iteration
@@ -378,10 +473,21 @@ CONTAINS
                     END IF
                 END IF
 
+                IF (.NOT. research_needed) THEN
+                    iteration_completed = .TRUE.
+                END IF
+
             END DO ! End DO WHILE (research_needed)
 
-            ! Store score for next iteration's aspiration window
-            last_iteration_score = best_score_so_far
+            IF (search_stop_requested()) EXIT
+
+            IF (iteration_completed .AND. iteration_found) THEN
+                best_move = iteration_best_move
+                best_move_found = .TRUE.
+                completed_depth = d
+                last_iteration_score = best_score_so_far
+            END IF
+
             ! (Info printing handled by caller; stats available via optional outputs)
 
             ! Move ordering for the next iteration: move the best move from this iteration to the front
@@ -394,9 +500,14 @@ CONTAINS
                 END IF
             END DO
 
+            IF (max_depth <= 0 .AND. d == target_depth) THEN
+                target_depth = target_depth + MAX_DEPTH
+            END IF
+            d = d + 1
         END DO
 
         IF (PRESENT(best_score_out)) best_score_out = best_score_so_far
+        IF (PRESENT(completed_depth_out)) completed_depth_out = completed_depth
 
     END SUBROUTINE find_best_move
 

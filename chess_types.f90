@@ -39,6 +39,7 @@ MODULE Chess_Types
 
     ! --- Maximum number of moves possible in a position ---
     INTEGER, PARAMETER :: MAX_MOVES = 256 ! Sufficient for chess
+    INTEGER, PARAMETER :: MAX_GAME_HISTORY = 256
 
     ! --- Direction arrays for piece movement ---
     INTEGER, PARAMETER, DIMENSION(4, 2) :: BISHOP_DIRS = RESHAPE((/  1,  1,  -1, -1, -1,  1, 1, -1 /), (/4, 2/))
@@ -78,6 +79,10 @@ MODULE Chess_Types
         LOGICAL           :: prev_bc_k = .FALSE.
         LOGICAL           :: prev_bc_q = .FALSE.
         INTEGER(KIND=8)   :: prev_zobrist_key = 0
+        INTEGER           :: prev_halfmove_clock = 0
+        INTEGER           :: prev_fullmove_number = 1
+        INTEGER           :: prev_repetition_count = 0
+        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: prev_repetition_history = 0
     END TYPE UnmakeInfo_Type
 
     ! --- Derived Type for Board State ---
@@ -96,7 +101,11 @@ MODULE Chess_Types
         TYPE(Square_Type), DIMENSION(16) :: black_pieces
         INTEGER :: num_white_pieces = 0
         INTEGER :: num_black_pieces = 0
+        INTEGER :: halfmove_clock = 0
+        INTEGER :: fullmove_number = 1
         INTEGER(KIND=8) :: zobrist_key = 0
+        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: repetition_history = 0
+        INTEGER :: repetition_count = 0
     END TYPE Board_Type
 
 CONTAINS

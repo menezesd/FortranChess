@@ -60,20 +60,20 @@ CONTAINS
     END SUBROUTINE init_move
 
     SUBROUTINE generate_captures(board, move_list, num_moves)
-        TYPE(Board_Type), INTENT(IN) :: board
+        TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(OUT) :: num_moves
-        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: pseudo_moves
-        INTEGER :: num_pseudo_moves, i
+        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
+        INTEGER :: num_legal_moves, i
 
         num_moves = 0
-        CALL generate_pseudo_moves(board, pseudo_moves, num_pseudo_moves)
+        CALL generate_moves(board, legal_moves, num_legal_moves)
 
-        DO i = 1, num_pseudo_moves
+        DO i = 1, num_legal_moves
             ! Include actual captures AND promotions (which are tactical)
-            IF (pseudo_moves(i)%captured_piece /= NO_PIECE .OR. &
-                pseudo_moves(i)%promotion_piece /= NO_PIECE) THEN
-                CALL add_move(move_list, num_moves, pseudo_moves(i))
+            IF (legal_moves(i)%captured_piece /= NO_PIECE .OR. &
+                legal_moves(i)%promotion_piece /= NO_PIECE) THEN
+                CALL add_move(move_list, num_moves, legal_moves(i))
             END IF
         END DO
     END SUBROUTINE generate_captures

@@ -1,6 +1,6 @@
 MODULE Game_State_Checker
     USE Chess_Types
-    USE Board_Utils, ONLY: is_in_check, get_opponent_color
+    USE Board_Utils, ONLY: is_in_check, get_opponent_color, is_fifty_move_draw, is_threefold_repetition
     USE Move_Generation, ONLY: generate_moves
     IMPLICIT NONE
     PRIVATE
@@ -30,6 +30,12 @@ CONTAINS
         is_over = .FALSE.
         winner_color = NO_COLOR
         game_status = GAME_ONGOING
+
+        IF (is_fifty_move_draw(board) .OR. is_threefold_repetition(board)) THEN
+            game_status = GAME_STALEMATE
+            is_over = .TRUE.
+            RETURN
+        END IF
 
         ! Generate legal moves for the current player
         CALL generate_moves(board, legal_moves_temp, num_legal_moves_temp)

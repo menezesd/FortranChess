@@ -17,6 +17,8 @@ MODULE Transposition_Table
     INTEGER, PARAMETER :: HASH_FLAG_ALPHA = 1 ! Lower bound
     INTEGER, PARAMETER :: HASH_FLAG_BETA  = 2 ! Upper bound
     INTEGER, PARAMETER :: TT_SIZE = 2**20 ! ~1 million entries
+    INTEGER, PARAMETER :: TT_MATE_SCORE = 100000
+    INTEGER, PARAMETER :: TT_MATE_THRESHOLD = TT_MATE_SCORE - 256
 
     ! --- Zobrist Keys (64-bit random numbers) ---
     INTEGER(KIND=8), DIMENSION(6, 2, 8, 8) :: ZOBRIST_PIECES
@@ -134,12 +136,13 @@ CONTAINS
 
     ! --- Store an entry in the TT ---
     ! Uses a depth-preferred replacement strategy with age consideration
-    SUBROUTINE store_tt_entry(hash_key, depth, score, flag, best_move)
+    SUBROUTINE store_tt_entry(hash_key, depth, score, flag, best_move, ply)
         INTEGER(KIND=8), INTENT(IN) :: hash_key
-        INTEGER, INTENT(IN) :: depth, score, flag
+        INTEGER, INTENT(IN) :: depth, score, flag, ply
         TYPE(Move_Type), INTENT(IN) :: best_move
         INTEGER(KIND=8) :: index
         LOGICAL :: should_replace
+        INTEGER :: stored_score
 
         index = IAND(hash_key, INT(TT_SIZE - 1, KIND=8)) + 1
 
@@ -160,10 +163,12 @@ CONTAINS
             should_replace = .TRUE.
         END IF
 
+        stored_score = score_to_tt(score, ply)
+
         IF (should_replace) THEN
             tt(index)%key = hash_key
             tt(index)%depth = depth
-            tt(index)%score = score
+            tt(index)%score = stored_score
             tt(index)%flag = flag
             tt(index)%age = tt_generation
             tt(index)%best_move = best_move
@@ -172,14 +177,15 @@ CONTAINS
 
     ! --- Probe the TT for an entry ---
     ! Returns .TRUE. if a usable entry is found
-    FUNCTION probe_tt(hash_key, depth, alpha, beta, entry) RESULT(found)
+    FUNCTION probe_tt(hash_key, depth, ply, alpha, beta, entry) RESULT(found)
         INTEGER(KIND=8), INTENT(IN) :: hash_key
-        INTEGER, INTENT(IN) :: depth
+        INTEGER, INTENT(IN) :: depth, ply
         INTEGER, INTENT(INOUT) :: alpha, beta
         TYPE(TT_Entry_Type), INTENT(OUT) :: entry
         LOGICAL :: found
         
         INTEGER(KIND=8) :: index
+        INTEGER :: adjusted_score
         
         index = IAND(hash_key, INT(TT_SIZE - 1, KIND=8)) + 1
         entry = tt(index)
@@ -188,19 +194,57 @@ CONTAINS
         IF (entry%key == hash_key) THEN
             ! Entry must be from a search at least as deep as the current search
             IF (entry%depth >= depth) THEN
+                adjusted_score = score_from_tt(entry%score, ply)
+                entry%score = adjusted_score
                 IF (entry%flag == HASH_FLAG_EXACT) THEN
                     found = .TRUE.
-                ELSE IF (entry%flag == HASH_FLAG_ALPHA .AND. entry%score > alpha) THEN
-                    alpha = entry%score
-                ELSE IF (entry%flag == HASH_FLAG_BETA .AND. entry%score < beta) THEN
-                    beta = entry%score
+                ELSE IF (entry%flag == HASH_FLAG_ALPHA .AND. adjusted_score > alpha) THEN
+                    alpha = adjusted_score
+                ELSE IF (entry%flag == HASH_FLAG_BETA .AND. adjusted_score < beta) THEN
+                    beta = adjusted_score
                 END IF
                 
                 IF (alpha >= beta) THEN
                     found = .TRUE.
                 END IF
             END IF
+        ELSE
+            entry%key = 0
+            entry%depth = 0
+            entry%score = 0
+            entry%flag = HASH_FLAG_EXACT
+            entry%age = 0
+            entry%best_move%from_sq%rank = 0
+            entry%best_move%from_sq%file = 0
+            entry%best_move%to_sq%rank = 0
+            entry%best_move%to_sq%file = 0
+            entry%best_move%is_castling = .FALSE.
+            entry%best_move%is_en_passant = .FALSE.
+            entry%best_move%promotion_piece = NO_PIECE
+            entry%best_move%captured_piece = NO_PIECE
         END IF
     END FUNCTION probe_tt
+
+    INTEGER FUNCTION score_to_tt(score, ply) RESULT(adjusted)
+        INTEGER, INTENT(IN) :: score, ply
+
+        adjusted = score
+        IF (score >= TT_MATE_THRESHOLD) THEN
+            adjusted = score + ply
+        ELSE IF (score <= -TT_MATE_THRESHOLD) THEN
+            adjusted = score - ply
+        END IF
+    END FUNCTION score_to_tt
+
+    INTEGER FUNCTION score_from_tt(score, ply) RESULT(adjusted)
+        INTEGER, INTENT(IN) :: score, ply
+
+        adjusted = score
+        IF (score >= TT_MATE_THRESHOLD) THEN
+            adjusted = score - ply
+        ELSE IF (score <= -TT_MATE_THRESHOLD) THEN
+            adjusted = score + ply
+        END IF
+    END FUNCTION score_from_tt
 
 END MODULE Transposition_Table

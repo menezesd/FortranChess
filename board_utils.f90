@@ -12,7 +12,8 @@ MODULE Board_Utils
               file_rank_to_sq, is_square_attacked, &
               find_king, is_in_check, update_piece_lists, &
               update_piece_lists_unmake, remove_from_piece_list, &
-              update_piece_position, add_to_piece_list
+              update_piece_position, add_to_piece_list, &
+              is_fifty_move_draw, is_threefold_repetition
 
 CONTAINS
 
@@ -170,9 +171,14 @@ CONTAINS
         board%wc_q = .TRUE.
         board%bc_k = .TRUE.
         board%bc_q = .TRUE.
+        board%halfmove_clock = 0
+        board%fullmove_number = 1
 
         ! Compute initial Zobrist key
         board%zobrist_key = compute_zobrist_hash(board)
+        board%repetition_history = 0
+        board%repetition_count = 1
+        board%repetition_history(1) = board%zobrist_key
 
     END SUBROUTINE init_board
 
@@ -483,6 +489,24 @@ CONTAINS
 
     END FUNCTION is_in_check
 
+    LOGICAL FUNCTION is_fifty_move_draw(board)
+        TYPE(Board_Type), INTENT(IN) :: board
+        is_fifty_move_draw = (board%halfmove_clock >= 100)
+    END FUNCTION is_fifty_move_draw
+
+    LOGICAL FUNCTION is_threefold_repetition(board)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER :: i, matches
+
+        matches = 0
+        DO i = 1, board%repetition_count
+            IF (board%repetition_history(i) == board%zobrist_key) THEN
+                matches = matches + 1
+            END IF
+        END DO
+        is_threefold_repetition = (matches >= 3)
+    END FUNCTION is_threefold_repetition
+
 
     ! --- Update piece lists after a move ---
     ! Maintains piece position lists after a move is applied.
@@ -512,9 +536,12 @@ CONTAINS
         INTEGER, INTENT(IN) :: captured_piece, captured_color
 
         INTEGER :: color_moved
+        INTEGER :: piece_moved
         LOGICAL :: dummy
+        TYPE(Square_Type) :: rook_from_sq, rook_to_sq
 
         color_moved = get_opponent_color(board%current_player)
+        piece_moved = board%squares_piece(to_sq%rank, to_sq%file)
 
         ! Remove captured piece from opponent's list if any
         IF (captured_piece /= NO_PIECE) THEN
@@ -523,6 +550,17 @@ CONTAINS
 
         ! Update moving piece's position
         CALL update_piece_position(board, from_sq, to_sq, color_moved)
+
+        IF (piece_moved == KING .AND. ABS(to_sq%file - from_sq%file) == 2) THEN
+            IF (to_sq%file == 7) THEN
+                rook_from_sq = file_rank_to_sq(8, from_sq%rank)
+                rook_to_sq = file_rank_to_sq(6, from_sq%rank)
+            ELSE
+                rook_from_sq = file_rank_to_sq(1, from_sq%rank)
+                rook_to_sq = file_rank_to_sq(4, from_sq%rank)
+            END IF
+            CALL update_piece_position(board, rook_from_sq, rook_to_sq, color_moved)
+        END IF
 
     END SUBROUTINE update_piece_lists
 
@@ -550,9 +588,23 @@ CONTAINS
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Square_Type), INTENT(IN) :: from_sq, to_sq, captured_sq
         INTEGER, INTENT(IN) :: captured_piece, captured_color
+        INTEGER :: piece_moved
+        TYPE(Square_Type) :: rook_from_sq, rook_to_sq
 
         ! Move piece back to from_sq
+        piece_moved = board%squares_piece(from_sq%rank, from_sq%file)
         CALL update_piece_position(board, to_sq, from_sq, board%current_player)
+
+        IF (piece_moved == KING .AND. ABS(to_sq%file - from_sq%file) == 2) THEN
+            IF (to_sq%file == 7) THEN
+                rook_from_sq = file_rank_to_sq(6, from_sq%rank)
+                rook_to_sq = file_rank_to_sq(8, from_sq%rank)
+            ELSE
+                rook_from_sq = file_rank_to_sq(4, from_sq%rank)
+                rook_to_sq = file_rank_to_sq(1, from_sq%rank)
+            END IF
+            CALL update_piece_position(board, rook_from_sq, rook_to_sq, board%current_player)
+        END IF
 
         ! Restore captured piece if any
         IF (captured_piece /= NO_PIECE) THEN
