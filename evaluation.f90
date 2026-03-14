@@ -198,6 +198,16 @@ CONTAINS
         TYPE(Square_Type) :: sq
         INTEGER :: mg_score, eg_score
         INTEGER :: mg_pst, eg_pst
+        INTEGER :: white_bishops, black_bishops
+        LOGICAL :: white_pawn_on_file(BOARD_SIZE), black_pawn_on_file(BOARD_SIZE)
+        INTEGER :: pr, blocked
+
+        ! --- Bonus/penalty constants ---
+        INTEGER, PARAMETER :: BISHOP_PAIR_MG = 30, BISHOP_PAIR_EG = 50
+        INTEGER, PARAMETER :: ROOK_OPEN_FILE_MG = 20, ROOK_OPEN_FILE_EG = 10
+        INTEGER, PARAMETER :: ROOK_SEMI_OPEN_MG = 10, ROOK_SEMI_OPEN_EG = 5
+        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_MG(8) = (/ 0, 5, 10, 20, 35, 60, 100, 0 /)
+        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_EG(8) = (/ 0, 10, 20, 40, 70, 120, 200, 0 /)
 
         ! --- Calculate Game Phase ---
         phase = 0
@@ -212,6 +222,25 @@ CONTAINS
             phase = phase + get_piece_phase(piece)
         END DO
         phase = MIN(phase, TOTAL_PHASE)
+
+        ! --- Build pawn file maps and count bishops ---
+        white_bishops = 0
+        black_bishops = 0
+        white_pawn_on_file = .FALSE.
+        black_pawn_on_file = .FALSE.
+
+        DO i = 1, board%num_white_pieces
+            sq = board%white_pieces(i)
+            piece = board%squares_piece(sq%rank, sq%file)
+            IF (piece == BISHOP) white_bishops = white_bishops + 1
+            IF (piece == PAWN) white_pawn_on_file(sq%file) = .TRUE.
+        END DO
+        DO i = 1, board%num_black_pieces
+            sq = board%black_pieces(i)
+            piece = board%squares_piece(sq%rank, sq%file)
+            IF (piece == BISHOP) black_bishops = black_bishops + 1
+            IF (piece == PAWN) black_pawn_on_file(sq%file) = .TRUE.
+        END DO
 
         ! --- Evaluate Pieces (mg/eg components) ---
         mg_score = 0
@@ -228,6 +257,38 @@ CONTAINS
             CALL get_piece_pst(piece, eval_rank, f, mg_pst, eg_pst)
             mg_score = mg_score + MATERIAL_MG(piece) + mg_pst
             eg_score = eg_score + MATERIAL_EG(piece) + eg_pst
+
+            ! Rook on open/semi-open file
+            IF (piece == ROOK) THEN
+                IF (.NOT. white_pawn_on_file(f) .AND. .NOT. black_pawn_on_file(f)) THEN
+                    mg_score = mg_score + ROOK_OPEN_FILE_MG
+                    eg_score = eg_score + ROOK_OPEN_FILE_EG
+                ELSE IF (.NOT. white_pawn_on_file(f)) THEN
+                    mg_score = mg_score + ROOK_SEMI_OPEN_MG
+                    eg_score = eg_score + ROOK_SEMI_OPEN_EG
+                END IF
+            END IF
+
+            ! Passed pawn detection (no enemy pawns blocking or guarding)
+            IF (piece == PAWN) THEN
+                blocked = 0
+                DO pr = r + 1, BOARD_SIZE
+                    IF (board%squares_piece(pr, f) == PAWN .AND. &
+                        board%squares_color(pr, f) == BLACK) blocked = 1
+                    IF (f > 1) THEN
+                        IF (board%squares_piece(pr, f-1) == PAWN .AND. &
+                            board%squares_color(pr, f-1) == BLACK) blocked = 1
+                    END IF
+                    IF (f < BOARD_SIZE) THEN
+                        IF (board%squares_piece(pr, f+1) == PAWN .AND. &
+                            board%squares_color(pr, f+1) == BLACK) blocked = 1
+                    END IF
+                END DO
+                IF (blocked == 0) THEN
+                    mg_score = mg_score + PASSED_PAWN_BONUS_MG(r)
+                    eg_score = eg_score + PASSED_PAWN_BONUS_EG(r)
+                END IF
+            END IF
         END DO
 
         ! Evaluate black pieces
@@ -241,7 +302,50 @@ CONTAINS
             CALL get_piece_pst(piece, eval_rank, f, mg_pst, eg_pst)
             mg_score = mg_score - (MATERIAL_MG(piece) + mg_pst)
             eg_score = eg_score - (MATERIAL_EG(piece) + eg_pst)
+
+            ! Rook on open/semi-open file
+            IF (piece == ROOK) THEN
+                IF (.NOT. white_pawn_on_file(f) .AND. .NOT. black_pawn_on_file(f)) THEN
+                    mg_score = mg_score - ROOK_OPEN_FILE_MG
+                    eg_score = eg_score - ROOK_OPEN_FILE_EG
+                ELSE IF (.NOT. black_pawn_on_file(f)) THEN
+                    mg_score = mg_score - ROOK_SEMI_OPEN_MG
+                    eg_score = eg_score - ROOK_SEMI_OPEN_EG
+                END IF
+            END IF
+
+            ! Passed pawn detection (no enemy pawns blocking or guarding)
+            IF (piece == PAWN) THEN
+                blocked = 0
+                DO pr = r - 1, 1, -1
+                    IF (board%squares_piece(pr, f) == PAWN .AND. &
+                        board%squares_color(pr, f) == WHITE) blocked = 1
+                    IF (f > 1) THEN
+                        IF (board%squares_piece(pr, f-1) == PAWN .AND. &
+                            board%squares_color(pr, f-1) == WHITE) blocked = 1
+                    END IF
+                    IF (f < BOARD_SIZE) THEN
+                        IF (board%squares_piece(pr, f+1) == PAWN .AND. &
+                            board%squares_color(pr, f+1) == WHITE) blocked = 1
+                    END IF
+                END DO
+                IF (blocked == 0) THEN
+                    ! Use flipped rank for black (rank 7 = 2nd rank = index 2)
+                    mg_score = mg_score - PASSED_PAWN_BONUS_MG(BOARD_SIZE - r + 1)
+                    eg_score = eg_score - PASSED_PAWN_BONUS_EG(BOARD_SIZE - r + 1)
+                END IF
+            END IF
         END DO
+
+        ! Bishop pair bonus
+        IF (white_bishops >= 2) THEN
+            mg_score = mg_score + BISHOP_PAIR_MG
+            eg_score = eg_score + BISHOP_PAIR_EG
+        END IF
+        IF (black_bishops >= 2) THEN
+            mg_score = mg_score - BISHOP_PAIR_MG
+            eg_score = eg_score - BISHOP_PAIR_EG
+        END IF
 
         evaluate_board = tapered_pst_value(mg_score, eg_score, phase, TOTAL_PHASE)
         IF (board%current_player == BLACK) evaluate_board = -evaluate_board

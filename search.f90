@@ -32,12 +32,15 @@ CONTAINS
         INTEGER, INTENT(IN) :: ply
         INTEGER, INTENT(IN) :: alpha, beta
 
-        INTEGER :: stand_pat, current_alpha, i
+        INTEGER :: stand_pat, current_alpha, i, delta
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves
         TYPE(Move_Type) :: current_move
         TYPE(UnmakeInfo_Type) :: unmake_info
         LOGICAL :: in_check
+        ! Delta pruning: piece values for estimating max capture gain
+        INTEGER, PARAMETER :: DELTA_PIECE_VAL(6) = (/ 100, 320, 330, 500, 900, 20000 /)
+        INTEGER, PARAMETER :: DELTA_MARGIN = 200 ! Safety margin for positional factors
 
         IF (poll_search_stop()) THEN
             score = 0
@@ -77,6 +80,14 @@ CONTAINS
 
         DO i = 1, num_moves
             current_move = moves(i)
+
+            ! Delta pruning: skip captures that can't possibly raise alpha
+            IF (.NOT. in_check .AND. current_move%captured_piece /= NO_PIECE) THEN
+                delta = stand_pat + DELTA_PIECE_VAL(current_move%captured_piece) + DELTA_MARGIN
+                IF (current_move%promotion_piece /= NO_PIECE) delta = delta + 800
+                IF (delta < current_alpha) CYCLE
+            END IF
+
             CALL make_move(board, current_move, unmake_info)
             score = -quiescence(board, ply + 1, -beta, -current_alpha)
             CALL unmake_move(board, current_move, unmake_info)
@@ -125,10 +136,10 @@ CONTAINS
         INTEGER, INTENT(INOUT) :: alpha, beta ! alpha and beta are modified by TT lookups
         INTEGER :: score, current_alpha, next_alpha, next_beta, original_alpha
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
-        INTEGER :: num_moves, i
+        INTEGER :: num_moves, i, reduction
         TYPE(Move_Type) :: current_move, best_move_here
         TYPE(UnmakeInfo_Type) :: unmake_info
-        LOGICAL :: in_check
+        LOGICAL :: in_check, gives_check, is_quiet
         TYPE(TT_Entry_Type) :: tt_entry
         LOGICAL :: tt_hit
         ! NMP constants and state
@@ -260,15 +271,43 @@ CONTAINS
         DO i = 1, num_moves
             IF (poll_search_stop()) EXIT
             current_move = moves(i)
+            is_quiet = (current_move%captured_piece == NO_PIECE .AND. &
+                        current_move%promotion_piece == NO_PIECE)
 
             ! Make the move on the board
             CALL make_move(board, current_move, unmake_info)
+            gives_check = is_in_check(board, board%current_player)
 
-            ! Recursively search from opponent's perspective
-            ! Negate score because we're switching perspectives
-            next_beta = -beta
-            next_alpha = -current_alpha
-            score = -negamax(board, current_depth - 1, ply + 1, next_beta, next_alpha)
+            ! --- Late Move Reductions (LMR) ---
+            ! Reduce depth for late quiet moves that don't give check
+            reduction = 0
+            IF (i > 3 .AND. current_depth >= 3 .AND. is_quiet .AND. &
+                .NOT. in_check .AND. .NOT. gives_check) THEN
+                IF (i > 6) THEN
+                    reduction = 2
+                ELSE
+                    reduction = 1
+                END IF
+            END IF
+
+            ! --- Principal Variation Search (PVS) ---
+            IF (i == 1) THEN
+                ! First move: search with full window
+                next_beta = -beta
+                next_alpha = -current_alpha
+                score = -negamax(board, current_depth - 1, ply + 1, next_beta, next_alpha)
+            ELSE
+                ! Later moves: search with null window (scout)
+                next_beta = -current_alpha
+                next_alpha = -current_alpha - 1
+                score = -negamax(board, current_depth - 1 - reduction, ply + 1, next_beta, next_alpha)
+                ! Re-search with full window if it beats alpha
+                IF (score > current_alpha .AND. score < beta) THEN
+                    next_beta = -beta
+                    next_alpha = -current_alpha
+                    score = -negamax(board, current_depth - 1, ply + 1, next_beta, next_alpha)
+                END IF
+            END IF
 
             ! Undo the move to restore board state
             CALL unmake_move(board, current_move, unmake_info)
@@ -290,9 +329,7 @@ CONTAINS
                  CALL store_tt_entry(board%zobrist_key, depth_param, beta, HASH_FLAG_ALPHA, moves(i), ply)
                  ! Store killer move if it's a quiet move (now using external module)
                  CALL store_killer(current_move, ply)
-                 IF (current_move%captured_piece == NO_PIECE .AND. &
-                     .NOT. current_move%is_castling .AND. &
-                     current_move%promotion_piece == NO_PIECE) THEN
+                 IF (is_quiet .AND. .NOT. current_move%is_castling) THEN
                      CALL update_history_score(board, current_move, current_depth)
                  END IF
                  EXIT ! Prune remaining moves
