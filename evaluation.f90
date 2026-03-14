@@ -215,6 +215,7 @@ CONTAINS
         INTEGER, PARAMETER :: PASSED_PAWN_BONUS_EG(8) = (/ 0, 10, 20, 40, 70, 120, 200, 0 /)
         INTEGER, PARAMETER :: DOUBLED_PAWN_MG = -10, DOUBLED_PAWN_EG = -20
         INTEGER, PARAMETER :: ISOLATED_PAWN_MG = -15, ISOLATED_PAWN_EG = -20
+        INTEGER, PARAMETER :: CONNECTED_PAWN_MG = 7, CONNECTED_PAWN_EG = 5
         INTEGER, PARAMETER :: PAWN_SHIELD_BONUS = 10
         INTEGER, PARAMETER :: MOBILITY_BONUS_MG = 4, MOBILITY_BONUS_EG = 3
 
@@ -313,6 +314,16 @@ CONTAINS
                     mg_score = mg_score + PASSED_PAWN_BONUS_MG(r)
                     eg_score = eg_score + PASSED_PAWN_BONUS_EG(r)
                 END IF
+                ! Connected pawns: defended by another pawn diagonally behind
+                IF (r > 1) THEN
+                    IF ((f > 1 .AND. board%squares_piece(r-1, f-1) == PAWN .AND. &
+                         board%squares_color(r-1, f-1) == WHITE) .OR. &
+                        (f < BOARD_SIZE .AND. board%squares_piece(r-1, f+1) == PAWN .AND. &
+                         board%squares_color(r-1, f+1) == WHITE)) THEN
+                        mg_score = mg_score + CONNECTED_PAWN_MG
+                        eg_score = eg_score + CONNECTED_PAWN_EG
+                    END IF
+                END IF
             END IF
 
             ! Knight/Bishop mobility: count available squares
@@ -387,6 +398,16 @@ CONTAINS
                     ! Use flipped rank for black (rank 7 = 2nd rank = index 2)
                     mg_score = mg_score - PASSED_PAWN_BONUS_MG(BOARD_SIZE - r + 1)
                     eg_score = eg_score - PASSED_PAWN_BONUS_EG(BOARD_SIZE - r + 1)
+                END IF
+                ! Connected pawns: defended by another pawn diagonally behind
+                IF (r < BOARD_SIZE) THEN
+                    IF ((f > 1 .AND. board%squares_piece(r+1, f-1) == PAWN .AND. &
+                         board%squares_color(r+1, f-1) == BLACK) .OR. &
+                        (f < BOARD_SIZE .AND. board%squares_piece(r+1, f+1) == PAWN .AND. &
+                         board%squares_color(r+1, f+1) == BLACK)) THEN
+                        mg_score = mg_score - CONNECTED_PAWN_MG
+                        eg_score = eg_score - CONNECTED_PAWN_EG
+                    END IF
                 END IF
             END IF
 

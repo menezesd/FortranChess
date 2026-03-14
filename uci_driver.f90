@@ -3,7 +3,7 @@ MODULE UCI_Driver
     USE Board_Utils, ONLY: char_to_file, char_to_rank, file_rank_to_sq, init_board
     USE Move_Generation, ONLY: generate_moves
     USE Make_Unmake, ONLY: make_move
-    USE Search, ONLY: find_best_move
+    USE Search, ONLY: find_best_move, search_node_count
     USE Search_Control, ONLY: begin_search_polling, end_search_polling, search_quit_requested, &
         has_buffered_command, pop_buffered_command, read_next_command
     USE Transposition_Table, ONLY: init_zobrist_keys, compute_zobrist_hash
@@ -399,7 +399,7 @@ CONTAINS
         TYPE(Board_Type), INTENT(INOUT) :: board
         CHARACTER(LEN=*), INTENT(IN) :: line
         INTEGER :: depth, movetime, wtime, btime, winc, binc, movestogo
-        INTEGER :: chosen_depth, reported_depth, time_budget
+        INTEGER :: chosen_depth, reported_depth, time_budget, reported_score
         TYPE(Move_Type) :: best_move
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves, root_moves
         LOGICAL :: best_found
@@ -446,7 +446,9 @@ CONTAINS
         ELSE
             CALL begin_search_polling()
         END IF
-        CALL find_best_move(board, chosen_depth, best_found, best_move, completed_depth_out=reported_depth, &
+        reported_score = 0
+        CALL find_best_move(board, chosen_depth, best_found, best_move, &
+            best_score_out=reported_score, completed_depth_out=reported_depth, &
             root_moves_in=root_moves, root_num_moves_in=num_root_moves)
         CALL end_search_polling()
         IF (search_quit_requested()) STOP
@@ -457,7 +459,7 @@ CONTAINS
             END IF
         END IF
         CALL SYSTEM_CLOCK(end_clock)
-        CALL print_uci_info(reported_depth, start_clock, end_clock, rate, best_move, best_found)
+        CALL print_uci_info(reported_depth, reported_score, start_clock, end_clock, rate, best_move, best_found)
         IF (best_found) THEN
             best_str = move_to_uci(best_move)
         ELSE
@@ -466,21 +468,32 @@ CONTAINS
         WRITE(*,'(A)') 'bestmove ' // TRIM(best_str)
     END SUBROUTINE handle_go
 
-    SUBROUTINE print_uci_info(depth, start_clk, end_clk, rate, best_move, found)
-        INTEGER, INTENT(IN) :: depth, start_clk, end_clk, rate
+    SUBROUTINE print_uci_info(depth, score, start_clk, end_clk, rate, best_move, found)
+        INTEGER, INTENT(IN) :: depth, score, start_clk, end_clk, rate
         TYPE(Move_Type), INTENT(IN) :: best_move
         LOGICAL, INTENT(IN) :: found
-        REAL :: ms
+        INTEGER :: time_ms, nps
         CHARACTER(LEN=8) :: mvstr
-        CHARACTER(LEN=128) :: line
+        CHARACTER(LEN=256) :: line
 
-        ms = 1000.0 * REAL(end_clk - start_clk) / REAL(rate)
+        time_ms = NINT(1000.0 * REAL(end_clk - start_clk) / REAL(rate))
         IF (found) THEN
             mvstr = move_to_uci(best_move)
         ELSE
             mvstr = '0000'
         END IF
-        WRITE(line,'(A,I0,A,F7.2,A,A)') 'info depth ', depth, ' time ', ms, ' pv ', TRIM(mvstr)
+        IF (time_ms > 0) THEN
+            nps = INT(search_node_count * 1000_8 / INT(time_ms, KIND=8))
+        ELSE
+            nps = 0
+        END IF
+        WRITE(line,'(A,I0,A,I0,A,I0,A,I0,A,I0,A,A)') &
+            'info depth ', depth, &
+            ' score cp ', score, &
+            ' nodes ', search_node_count, &
+            ' time ', time_ms, &
+            ' nps ', nps, &
+            ' pv ', TRIM(mvstr)
         WRITE(*,'(A)') TRIM(line)
     END SUBROUTINE print_uci_info
 

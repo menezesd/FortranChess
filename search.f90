@@ -16,13 +16,15 @@ MODULE Search
         store_killer, update_history_score, clear_history, moves_equal, order_moves_with_killers
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: find_best_move
+    PUBLIC :: find_best_move, search_node_count
 
     ! Constants for search algorithm
     INTEGER, PARAMETER :: MATE_SCORE = 100000 ! Score indicating checkmate
     INTEGER, PARAMETER :: INF = MATE_SCORE + 1000 ! Represents infinity for alpha-beta bounds
     INTEGER, PARAMETER :: MAX_DEPTH = 64 ! Maximum search depth
-    ! Removed NUM_KILLERS and killer_moves array as they are now in Move_Ordering_Heuristics
+
+    ! Node counter for benchmarking
+    INTEGER(KIND=8) :: search_node_count = 0
 
 CONTAINS
 
@@ -41,6 +43,8 @@ CONTAINS
         ! Delta pruning: piece values for estimating max capture gain
         INTEGER, PARAMETER :: DELTA_PIECE_VAL(6) = (/ 100, 320, 330, 500, 900, 20000 /)
         INTEGER, PARAMETER :: DELTA_MARGIN = 200 ! Safety margin for positional factors
+
+        search_node_count = search_node_count + 1
 
         IF (poll_search_stop()) THEN
             score = 0
@@ -160,6 +164,7 @@ CONTAINS
         INTEGER, PARAMETER :: RAZOR_MARGIN = 400
 
         current_depth = depth_param
+        search_node_count = search_node_count + 1
 
         IF (poll_search_stop()) THEN
             best_score = 0
@@ -456,6 +461,7 @@ CONTAINS
         best_score_so_far = -INF
         last_iteration_score = 0 ! Initialize
         completed_depth = 0
+        search_node_count = 0
         CALL SYSTEM_CLOCK(start_count, count_rate)
 
         ! Aspiration window delta

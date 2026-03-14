@@ -41,7 +41,7 @@ PROGRAM Fortran_Chess
         STOP
     END IF
 
-    search_depth = 5 ! AI Difficulty
+    search_depth = 7 ! AI Difficulty
     ! --- Player Color Selection ---
     DO
         PRINT *, "Choose your color (White/Black): "
@@ -66,10 +66,10 @@ PROGRAM Fortran_Chess
     DO
         PRINT *, "Enter AI search depth (e.g., 5): "
         READ *, search_depth
-        IF (search_depth >= 1 .AND. search_depth <= 10) THEN ! Example valid range
+        IF (search_depth >= 1 .AND. search_depth <= 20) THEN
             EXIT
         ELSE
-            PRINT *, "Invalid search depth. Please enter a number between 1 and 10."
+            PRINT *, "Invalid search depth. Please enter a number between 1 and 20."
         END IF
     END DO
 
