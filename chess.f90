@@ -94,6 +94,8 @@ PROGRAM Fortran_Chess
                     END IF
                 CASE (GAME_STALEMATE)
                     PRINT *, "=== STALEMATE! Draw. ==="
+                CASE (GAME_DRAW)
+                    PRINT *, "=== Draw by fifty-move rule or repetition. ==="
                 CASE DEFAULT
                     ! Should not happen
                     PRINT *, "Error: Unknown game over status."

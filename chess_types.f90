@@ -23,6 +23,7 @@ MODULE Chess_Types
     INTEGER, PARAMETER :: GAME_ONGOING   = 0
     INTEGER, PARAMETER :: GAME_CHECKMATE = 1
     INTEGER, PARAMETER :: GAME_STALEMATE = 2
+    INTEGER, PARAMETER :: GAME_DRAW      = 3
     INTEGER, PARAMETER :: NO_WINNER      = 0 ! Can be used with Game Status to indicate draw
 
     ! --- Constants for Piece Values (Centipawns) ---
@@ -82,7 +83,8 @@ MODULE Chess_Types
         INTEGER           :: prev_halfmove_clock = 0
         INTEGER           :: prev_fullmove_number = 1
         INTEGER           :: prev_repetition_count = 0
-        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: prev_repetition_history = 0
+        INTEGER(KIND=8)   :: prev_repetition_entry = 0
+        LOGICAL           :: repetition_was_reset = .FALSE.
     END TYPE UnmakeInfo_Type
 
     ! --- Derived Type for Board State ---

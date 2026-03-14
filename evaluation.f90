@@ -4,7 +4,7 @@
 ! ============================================
 MODULE Evaluation
     USE Chess_Types, ONLY: PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, NO_PIECE, &
-                           BOARD_SIZE, Board_Type, Square_Type, get_piece_order, WHITE, BLACK
+                           BOARD_SIZE, Board_Type, Square_Type, WHITE, BLACK
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: evaluate_board

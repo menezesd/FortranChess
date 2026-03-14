@@ -32,7 +32,7 @@ CONTAINS
         game_status = GAME_ONGOING
 
         IF (is_fifty_move_draw(board) .OR. is_threefold_repetition(board)) THEN
-            game_status = GAME_STALEMATE
+            game_status = GAME_DRAW
             is_over = .TRUE.
             RETURN
         END IF

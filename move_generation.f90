@@ -60,20 +60,29 @@ CONTAINS
     END SUBROUTINE init_move
 
     SUBROUTINE generate_captures(board, move_list, num_moves)
+        USE Make_Unmake
         TYPE(Board_Type), INTENT(INOUT) :: board
         TYPE(Move_Type), DIMENSION(:), INTENT(INOUT) :: move_list
         INTEGER, INTENT(OUT) :: num_moves
-        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: legal_moves
-        INTEGER :: num_legal_moves, i
+        TYPE(Move_Type), DIMENSION(MAX_MOVES) :: pseudo_moves
+        TYPE(UnmakeInfo_Type) :: unmake_info
+        INTEGER :: num_pseudo_moves, i, player_color
 
         num_moves = 0
-        CALL generate_moves(board, legal_moves, num_legal_moves)
+        player_color = board%current_player
 
-        DO i = 1, num_legal_moves
-            ! Include actual captures AND promotions (which are tactical)
-            IF (legal_moves(i)%captured_piece /= NO_PIECE .OR. &
-                legal_moves(i)%promotion_piece /= NO_PIECE) THEN
-                CALL add_move(move_list, num_moves, legal_moves(i))
+        ! Generate all pseudo-legal moves
+        CALL generate_pseudo_moves(board, pseudo_moves, num_pseudo_moves)
+
+        ! Filter: only captures/promotions, and only legal ones
+        DO i = 1, num_pseudo_moves
+            IF (pseudo_moves(i)%captured_piece /= NO_PIECE .OR. &
+                pseudo_moves(i)%promotion_piece /= NO_PIECE) THEN
+                CALL make_move(board, pseudo_moves(i), unmake_info)
+                IF (.NOT. is_in_check(board, player_color)) THEN
+                    CALL add_move(move_list, num_moves, pseudo_moves(i))
+                END IF
+                CALL unmake_move(board, pseudo_moves(i), unmake_info)
             END IF
         END DO
     END SUBROUTINE generate_captures

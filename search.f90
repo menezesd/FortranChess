@@ -27,8 +27,9 @@ MODULE Search
 CONTAINS
 
     ! --- Quiescence Search ---
-    RECURSIVE INTEGER FUNCTION quiescence(board, alpha, beta) RESULT(score)
+    RECURSIVE INTEGER FUNCTION quiescence(board, ply, alpha, beta) RESULT(score)
         TYPE(Board_Type), INTENT(INOUT) :: board
+        INTEGER, INTENT(IN) :: ply
         INTEGER, INTENT(IN) :: alpha, beta
 
         INTEGER :: stand_pat, current_alpha, i
@@ -67,7 +68,7 @@ CONTAINS
         ELSE
             CALL generate_moves(board, moves, num_moves)
             IF (num_moves == 0) THEN
-                score = -MATE_SCORE
+                score = -MATE_SCORE + ply
                 RETURN
             END IF
         END IF
@@ -77,7 +78,7 @@ CONTAINS
         DO i = 1, num_moves
             current_move = moves(i)
             CALL make_move(board, current_move, unmake_info)
-            score = -quiescence(board, -beta, -current_alpha)
+            score = -quiescence(board, ply + 1, -beta, -current_alpha)
             CALL unmake_move(board, current_move, unmake_info)
 
             IF (score >= beta) THEN
@@ -136,7 +137,6 @@ CONTAINS
         TYPE(Square_Type) :: prev_ep_sq
         INTEGER(KIND=8) :: prev_key
         INTEGER :: prev_halfmove_clock, prev_fullmove_number, prev_repetition_count
-        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: prev_repetition_history
         INTEGER :: current_depth ! Local variable for depth, can be modified
 
         current_depth = depth_param
@@ -169,7 +169,7 @@ CONTAINS
 
         ! Base case: evaluate position when search depth is reached
         IF (current_depth <= 0) THEN
-            best_score = quiescence(board, alpha, beta)
+            best_score = quiescence(board, ply, alpha, beta)
             RETURN
         END IF
 
@@ -185,7 +185,6 @@ CONTAINS
             prev_halfmove_clock = board%halfmove_clock
             prev_fullmove_number = board%fullmove_number
             prev_repetition_count = board%repetition_count
-            prev_repetition_history = board%repetition_history
 
             board%halfmove_clock = board%halfmove_clock + 1
             IF (board%current_player == BLACK) THEN
@@ -199,8 +198,6 @@ CONTAINS
             END IF
             IF (board%repetition_count < MAX_GAME_HISTORY) THEN
                 board%repetition_count = board%repetition_count + 1
-            ELSE
-                board%repetition_history(1:MAX_GAME_HISTORY-1) = board%repetition_history(2:MAX_GAME_HISTORY)
             END IF
             board%repetition_history(board%repetition_count) = board%zobrist_key
 
@@ -217,7 +214,6 @@ CONTAINS
             board%halfmove_clock = prev_halfmove_clock
             board%fullmove_number = prev_fullmove_number
             board%repetition_count = prev_repetition_count
-            board%repetition_history = prev_repetition_history
 
             ! If the null move search causes a beta cutoff, we can prune this node
             IF (score >= beta) THEN
@@ -241,7 +237,10 @@ CONTAINS
              RETURN
         END IF
 
-        ! --- TT Best Move Ordering ---
+        ! Order moves with killers and history heuristic
+        CALL order_moves_with_killers(board, moves, num_moves, ply)
+
+        ! --- TT Best Move Ordering (after sort so it stays at position 1) ---
         IF (tt_entry%best_move%from_sq%rank /= 0) THEN
             DO i = 1, num_moves
                 IF (moves_equal(moves(i), tt_entry%best_move)) THEN
@@ -252,9 +251,6 @@ CONTAINS
                 END IF
             END DO
         END IF
-
-        ! Order moves
-        CALL order_moves(board, moves, num_moves)
 
         ! Initialize best score to worst possible outcome
         best_score = -INF
@@ -296,7 +292,6 @@ CONTAINS
                  CALL store_killer(current_move, ply)
                  IF (current_move%captured_piece == NO_PIECE .AND. &
                      .NOT. current_move%is_castling .AND. &
-                     .NOT. current_move%is_en_passant .AND. &
                      current_move%promotion_piece == NO_PIECE) THEN
                      CALL update_history_score(board, current_move, current_depth)
                  END IF

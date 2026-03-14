@@ -5,7 +5,7 @@
 MODULE Make_Unmake
     USE Chess_Types
     USE Board_Utils, ONLY: get_opponent_color, update_piece_lists, update_piece_lists_unmake, file_rank_to_sq
-    USE Transposition_Table, ONLY: compute_zobrist_hash
+    USE Transposition_Table, ONLY: ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: make_move, unmake_move
@@ -39,6 +39,7 @@ CONTAINS
         INTEGER :: r_from, f_from, r_to, f_to, player_color, opponent_color
         INTEGER :: piece_moved, color_moved, r_capture
         TYPE(Square_Type) :: from_sq, to_sq
+        INTEGER(KIND=8) :: hash
 
         player_color = board%current_player
         opponent_color = get_opponent_color(player_color)
@@ -58,7 +59,6 @@ CONTAINS
         unmake_info%prev_halfmove_clock = board%halfmove_clock
         unmake_info%prev_fullmove_number = board%fullmove_number
         unmake_info%prev_repetition_count = board%repetition_count
-        unmake_info%prev_repetition_history = board%repetition_history
 
         piece_moved = board%squares_piece(r_from, f_from)
         color_moved = board%squares_color(r_from, f_from)
@@ -158,16 +158,70 @@ CONTAINS
         END IF
         board%current_player = opponent_color
 
-        board%zobrist_key = compute_zobrist_hash(board)
+        ! 5b. Incremental Zobrist hash update
+        hash = unmake_info%prev_zobrist_key
+
+        ! Remove moving piece from old square
+        hash = IEOR(hash, ZOBRIST_PIECES(piece_moved, player_color, r_from, f_from))
+
+        IF (move%is_castling) THEN
+            ! Place king on new square
+            hash = IEOR(hash, ZOBRIST_PIECES(KING, player_color, r_to, f_to))
+            ! Move rook
+            IF (f_to == 7) THEN ! Kingside
+                hash = IEOR(hash, ZOBRIST_PIECES(ROOK, player_color, r_from, 8))
+                hash = IEOR(hash, ZOBRIST_PIECES(ROOK, player_color, r_from, 6))
+            ELSE ! Queenside
+                hash = IEOR(hash, ZOBRIST_PIECES(ROOK, player_color, r_from, 1))
+                hash = IEOR(hash, ZOBRIST_PIECES(ROOK, player_color, r_from, 4))
+            END IF
+        ELSE
+            ! Remove captured piece
+            IF (move%is_en_passant) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(PAWN, opponent_color, &
+                    unmake_info%captured_sq%rank, unmake_info%captured_sq%file))
+            ELSE IF (unmake_info%captured_piece_type /= NO_PIECE) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(unmake_info%captured_piece_type, &
+                    unmake_info%captured_piece_color, r_to, f_to))
+            END IF
+            ! Place piece on new square (promoted piece or original)
+            IF (move%promotion_piece /= NO_PIECE) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(move%promotion_piece, player_color, r_to, f_to))
+            ELSE
+                hash = IEOR(hash, ZOBRIST_PIECES(piece_moved, player_color, r_to, f_to))
+            END IF
+        END IF
+
+        ! Toggle side to move
+        hash = IEOR(hash, ZOBRIST_BLACK_TO_MOVE)
+
+        ! Update castling rights in hash (XOR changed rights)
+        IF (unmake_info%prev_wc_k .NEQV. board%wc_k) hash = IEOR(hash, ZOBRIST_CASTLING(1))
+        IF (unmake_info%prev_wc_q .NEQV. board%wc_q) hash = IEOR(hash, ZOBRIST_CASTLING(2))
+        IF (unmake_info%prev_bc_k .NEQV. board%bc_k) hash = IEOR(hash, ZOBRIST_CASTLING(3))
+        IF (unmake_info%prev_bc_q .NEQV. board%bc_q) hash = IEOR(hash, ZOBRIST_CASTLING(4))
+
+        ! Update en passant in hash
+        IF (unmake_info%prev_ep_target_present) &
+            hash = IEOR(hash, ZOBRIST_EP_FILE(unmake_info%prev_ep_target_sq%file))
+        IF (board%ep_target_present) &
+            hash = IEOR(hash, ZOBRIST_EP_FILE(board%ep_target_sq%file))
+
+        board%zobrist_key = hash
+
+        ! 5c. Update repetition history
         IF (piece_moved == PAWN .OR. unmake_info%captured_piece_type /= NO_PIECE) THEN
-            board%repetition_history = 0
+            ! Irreversible move: save overwritten entry, reset tracking
+            unmake_info%repetition_was_reset = .TRUE.
+            IF (board%repetition_count > 0) THEN
+                unmake_info%prev_repetition_entry = board%repetition_history(1)
+            END IF
             board%repetition_count = 1
             board%repetition_history(1) = board%zobrist_key
         ELSE
+            unmake_info%repetition_was_reset = .FALSE.
             IF (board%repetition_count < MAX_GAME_HISTORY) THEN
                 board%repetition_count = board%repetition_count + 1
-            ELSE
-                board%repetition_history(1:MAX_GAME_HISTORY-1) = board%repetition_history(2:MAX_GAME_HISTORY)
             END IF
             board%repetition_history(board%repetition_count) = board%zobrist_key
         END IF
@@ -222,7 +276,9 @@ CONTAINS
         board%halfmove_clock = unmake_info%prev_halfmove_clock
         board%fullmove_number = unmake_info%prev_fullmove_number
         board%repetition_count = unmake_info%prev_repetition_count
-        board%repetition_history = unmake_info%prev_repetition_history
+        IF (unmake_info%repetition_was_reset .AND. unmake_info%prev_repetition_count > 0) THEN
+            board%repetition_history(1) = unmake_info%prev_repetition_entry
+        END IF
 
         ! 3. Reverse Piece Movements
         r_from = move%from_sq%rank; f_from = move%from_sq%file
