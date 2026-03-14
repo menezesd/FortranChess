@@ -247,8 +247,12 @@ CONTAINS
             END IF
         END IF
 
-        ! --- Static eval for pruning decisions ---
-        static_eval = evaluate_board(board)
+        ! --- Static eval for pruning decisions (only needed at low depth) ---
+        IF (.NOT. in_check .AND. current_depth <= 3) THEN
+            static_eval = evaluate_board(board)
+        ELSE
+            static_eval = -INF
+        END IF
 
         ! --- Reverse Futility Pruning (Static Null Move Pruning) ---
         ! If static eval is well above beta at shallow depth, the position is so good
@@ -289,11 +293,12 @@ CONTAINS
         ! When no TT move is available at sufficient depth, do a shallow search
         ! to find a good move for ordering.
         IF (tt_entry%best_move%from_sq%rank == 0 .AND. current_depth >= 4 .AND. .NOT. in_check) THEN
-            next_alpha = -beta
-            next_beta = -alpha
-            score = -negamax(board, current_depth - 2, ply, next_alpha, next_beta)
+            next_alpha = alpha
+            next_beta = beta
+            score = negamax(board, current_depth - 2, ply, next_alpha, next_beta)
             ! Re-probe TT after IID search to get the best move it found
             tt_hit = probe_tt(board%zobrist_key, 0, ply, alpha, beta, tt_entry)
+            current_alpha = alpha
         END IF
 
         ! --- Futility pruning flag ---

@@ -5,7 +5,7 @@
 MODULE Evaluation
     USE Chess_Types, ONLY: PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, NO_PIECE, &
                            BOARD_SIZE, Board_Type, Square_Type, WHITE, BLACK, &
-                           KNIGHT_DELTAS, BISHOP_DIRS, NO_COLOR
+                           KNIGHT_DELTAS, BISHOP_DIRS
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: evaluate_board
