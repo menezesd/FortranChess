@@ -13,7 +13,7 @@ MODULE Board_Utils
               find_king, is_in_check, update_piece_lists, &
               update_piece_lists_unmake, remove_from_piece_list, &
               update_piece_position, add_to_piece_list, &
-              is_fifty_move_draw, is_threefold_repetition
+              is_fifty_move_draw, is_threefold_repetition, see_capture
 
 CONTAINS
 
@@ -507,6 +507,186 @@ CONTAINS
         is_threefold_repetition = (matches >= 3)
     END FUNCTION is_threefold_repetition
 
+
+    ! --- Static Exchange Evaluation (SEE) ---
+    ! Estimates the material outcome of a capture sequence on a square.
+    ! Returns the estimated material gain (positive = good for attacker).
+    ! Uses a simplified approach: finds the least valuable attacker for each side.
+    INTEGER FUNCTION see_capture(board, move) RESULT(see_val)
+        TYPE(Board_Type), INTENT(IN) :: board
+        TYPE(Move_Type), INTENT(IN) :: move
+
+        INTEGER, PARAMETER :: SEE_PIECE_VAL(6) = (/ 100, 320, 330, 500, 900, 20000 /)
+        INTEGER :: gain(32), d, piece, color, target_sq_r, target_sq_f
+        INTEGER :: attacker_piece, attacker_color
+        INTEGER :: r, f
+        LOGICAL :: found
+        INTEGER :: occ_piece(8, 8), occ_color(8, 8)
+
+        ! Copy board occupancy (we'll "remove" pieces as they capture)
+        occ_piece = board%squares_piece
+        occ_color = board%squares_color
+
+        target_sq_r = move%to_sq%rank
+        target_sq_f = move%to_sq%file
+
+        ! Initial capture
+        IF (move%captured_piece == NO_PIECE) THEN
+            see_val = 0
+            RETURN
+        END IF
+
+        attacker_piece = board%squares_piece(move%from_sq%rank, move%from_sq%file)
+        attacker_color = board%squares_color(move%from_sq%rank, move%from_sq%file)
+
+        d = 1
+        gain(1) = SEE_PIECE_VAL(move%captured_piece)
+        IF (move%promotion_piece /= NO_PIECE) THEN
+            gain(1) = gain(1) + SEE_PIECE_VAL(move%promotion_piece) - SEE_PIECE_VAL(PAWN)
+        END IF
+
+        ! Remove initial attacker from occupancy
+        occ_piece(move%from_sq%rank, move%from_sq%file) = NO_PIECE
+        occ_color(move%from_sq%rank, move%from_sq%file) = NO_COLOR
+
+        piece = attacker_piece
+        color = get_opponent_color(attacker_color)
+
+        ! Iterate captures on the target square
+        DO WHILE (d < 30)
+            d = d + 1
+            gain(d) = SEE_PIECE_VAL(piece) - gain(d - 1) ! Negamax-style
+
+            ! Find least valuable attacker of 'color' on target square
+            CALL find_least_valuable_attacker(occ_piece, occ_color, &
+                target_sq_r, target_sq_f, color, attacker_piece, r, f, found)
+
+            IF (.NOT. found) EXIT
+
+            ! Remove this attacker
+            occ_piece(r, f) = NO_PIECE
+            occ_color(r, f) = NO_COLOR
+
+            piece = attacker_piece
+            color = get_opponent_color(color)
+        END DO
+
+        ! Minimax the gain array
+        d = d - 1
+        DO WHILE (d > 1)
+            gain(d - 1) = -MAX(-gain(d - 1), gain(d))
+            d = d - 1
+        END DO
+
+        see_val = gain(1)
+    END FUNCTION see_capture
+
+    ! Find the least valuable piece of 'color' attacking (tr, tf)
+    SUBROUTINE find_least_valuable_attacker(occ_piece, occ_color, tr, tf, color, &
+                                             found_piece, found_r, found_f, found)
+        INTEGER, INTENT(IN) :: occ_piece(8, 8), occ_color(8, 8)
+        INTEGER, INTENT(IN) :: tr, tf, color
+        INTEGER, INTENT(OUT) :: found_piece, found_r, found_f
+        LOGICAL, INTENT(OUT) :: found
+
+        INTEGER :: r, f, dr, df, nr, nf, i, pawn_dir
+
+        found = .FALSE.
+
+        ! Check pawns
+        IF (color == WHITE) THEN
+            pawn_dir = -1
+        ELSE
+            pawn_dir = 1
+        END IF
+        r = tr + pawn_dir
+        IF (r >= 1 .AND. r <= 8) THEN
+            DO df = -1, 1, 2
+                f = tf + df
+                IF (f >= 1 .AND. f <= 8) THEN
+                    IF (occ_piece(r, f) == PAWN .AND. occ_color(r, f) == color) THEN
+                        found_piece = PAWN; found_r = r; found_f = f; found = .TRUE.
+                        RETURN
+                    END IF
+                END IF
+            END DO
+        END IF
+
+        ! Check knights
+        DO i = 1, 8
+            nr = tr + KNIGHT_DELTAS(i, 1)
+            nf = tf + KNIGHT_DELTAS(i, 2)
+            IF (nr >= 1 .AND. nr <= 8 .AND. nf >= 1 .AND. nf <= 8) THEN
+                IF (occ_piece(nr, nf) == KNIGHT .AND. occ_color(nr, nf) == color) THEN
+                    found_piece = KNIGHT; found_r = nr; found_f = nf; found = .TRUE.
+                    RETURN
+                END IF
+            END IF
+        END DO
+
+        ! Check bishops and queens (diagonal)
+        DO i = 1, 4
+            dr = BISHOP_DIRS(i, 1)
+            df = BISHOP_DIRS(i, 2)
+            nr = tr + dr; nf = tf + df
+            DO WHILE (nr >= 1 .AND. nr <= 8 .AND. nf >= 1 .AND. nf <= 8)
+                IF (occ_piece(nr, nf) /= NO_PIECE) THEN
+                    IF (occ_color(nr, nf) == color) THEN
+                        IF (occ_piece(nr, nf) == BISHOP) THEN
+                            found_piece = BISHOP; found_r = nr; found_f = nf; found = .TRUE.
+                            RETURN
+                        ELSE IF (occ_piece(nr, nf) == QUEEN) THEN
+                            ! Keep looking for a bishop first (less valuable)
+                            IF (.NOT. found) THEN
+                                found_piece = QUEEN; found_r = nr; found_f = nf; found = .TRUE.
+                            END IF
+                        END IF
+                    END IF
+                    EXIT ! Blocked by a piece
+                END IF
+                nr = nr + dr; nf = nf + df
+            END DO
+        END DO
+        IF (found .AND. found_piece /= QUEEN) RETURN
+
+        ! Check rooks and queens (straight)
+        DO i = 1, 4
+            dr = ROOK_DIRS(i, 1)
+            df = ROOK_DIRS(i, 2)
+            nr = tr + dr; nf = tf + df
+            DO WHILE (nr >= 1 .AND. nr <= 8 .AND. nf >= 1 .AND. nf <= 8)
+                IF (occ_piece(nr, nf) /= NO_PIECE) THEN
+                    IF (occ_color(nr, nf) == color) THEN
+                        IF (occ_piece(nr, nf) == ROOK) THEN
+                            IF (.NOT. found .OR. found_piece == QUEEN) THEN
+                                found_piece = ROOK; found_r = nr; found_f = nf; found = .TRUE.
+                            END IF
+                            EXIT
+                        ELSE IF (occ_piece(nr, nf) == QUEEN .AND. .NOT. found) THEN
+                            found_piece = QUEEN; found_r = nr; found_f = nf; found = .TRUE.
+                        END IF
+                    END IF
+                    EXIT
+                END IF
+                nr = nr + dr; nf = nf + df
+            END DO
+        END DO
+        IF (found) RETURN
+
+        ! Check king
+        DO dr = -1, 1
+            DO df = -1, 1
+                IF (dr == 0 .AND. df == 0) CYCLE
+                nr = tr + dr; nf = tf + df
+                IF (nr >= 1 .AND. nr <= 8 .AND. nf >= 1 .AND. nf <= 8) THEN
+                    IF (occ_piece(nr, nf) == KING .AND. occ_color(nr, nf) == color) THEN
+                        found_piece = KING; found_r = nr; found_f = nf; found = .TRUE.
+                        RETURN
+                    END IF
+                END IF
+            END DO
+        END DO
+    END SUBROUTINE find_least_valuable_attacker
 
     ! --- Update piece lists after a move ---
     ! Maintains piece position lists after a move is applied.

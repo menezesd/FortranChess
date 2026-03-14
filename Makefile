@@ -1,6 +1,8 @@
 # Fortran compiler
 FC = gfortran
-FFLAGS = -g -O0 -Wall
+FFLAGS_DEBUG = -g -O0 -Wall -fcheck=all -fbacktrace
+FFLAGS_RELEASE = -O2 -Wall -march=native
+FFLAGS = $(FFLAGS_RELEASE)
 
 # Source files
 SRC = chess.f90 board_utils.f90 chess_types.f90 evaluation.f90 make_unmake.f90 move_generation.f90 search.f90 search_control.f90 transposition_table.f90 user_input_processor.f90 move_ordering_heuristics.f90 game_state_checker.f90 uci_driver.f90
@@ -10,6 +12,9 @@ OBJ = $(SRC:.f90=.o)
 EXE = chess
 
 all: $(EXE)
+
+debug: FFLAGS = $(FFLAGS_DEBUG)
+debug: $(EXE)
 
 $(EXE): $(OBJ)
 	$(FC) $(FFLAGS) -o $@ $^

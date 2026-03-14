@@ -4,7 +4,8 @@
 ! ============================================
 MODULE Evaluation
     USE Chess_Types, ONLY: PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, NO_PIECE, &
-                           BOARD_SIZE, Board_Type, Square_Type, WHITE, BLACK
+                           BOARD_SIZE, Board_Type, Square_Type, WHITE, BLACK, &
+                           KNIGHT_DELTAS, BISHOP_DIRS, NO_COLOR
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: evaluate_board
@@ -199,8 +200,12 @@ CONTAINS
         INTEGER :: mg_score, eg_score
         INTEGER :: mg_pst, eg_pst
         INTEGER :: white_bishops, black_bishops
+        INTEGER :: white_pawn_count(BOARD_SIZE), black_pawn_count(BOARD_SIZE)
         LOGICAL :: white_pawn_on_file(BOARD_SIZE), black_pawn_on_file(BOARD_SIZE)
         INTEGER :: pr, blocked
+        INTEGER :: white_king_r, white_king_f, black_king_r, black_king_f
+        INTEGER :: shield_r, shield_f, mobility, nr, nf, dr, df, dir_idx
+        LOGICAL :: has_adj_pawn
 
         ! --- Bonus/penalty constants ---
         INTEGER, PARAMETER :: BISHOP_PAIR_MG = 30, BISHOP_PAIR_EG = 50
@@ -208,6 +213,10 @@ CONTAINS
         INTEGER, PARAMETER :: ROOK_SEMI_OPEN_MG = 10, ROOK_SEMI_OPEN_EG = 5
         INTEGER, PARAMETER :: PASSED_PAWN_BONUS_MG(8) = (/ 0, 5, 10, 20, 35, 60, 100, 0 /)
         INTEGER, PARAMETER :: PASSED_PAWN_BONUS_EG(8) = (/ 0, 10, 20, 40, 70, 120, 200, 0 /)
+        INTEGER, PARAMETER :: DOUBLED_PAWN_MG = -10, DOUBLED_PAWN_EG = -20
+        INTEGER, PARAMETER :: ISOLATED_PAWN_MG = -15, ISOLATED_PAWN_EG = -20
+        INTEGER, PARAMETER :: PAWN_SHIELD_BONUS = 10
+        INTEGER, PARAMETER :: MOBILITY_BONUS_MG = 4, MOBILITY_BONUS_EG = 3
 
         ! --- Calculate Game Phase ---
         phase = 0
@@ -223,23 +232,39 @@ CONTAINS
         END DO
         phase = MIN(phase, TOTAL_PHASE)
 
-        ! --- Build pawn file maps and count bishops ---
+        ! --- Build pawn file maps, count bishops, find kings ---
         white_bishops = 0
         black_bishops = 0
         white_pawn_on_file = .FALSE.
         black_pawn_on_file = .FALSE.
+        white_pawn_count = 0
+        black_pawn_count = 0
+        white_king_r = 1; white_king_f = 5
+        black_king_r = 8; black_king_f = 5
 
         DO i = 1, board%num_white_pieces
             sq = board%white_pieces(i)
             piece = board%squares_piece(sq%rank, sq%file)
             IF (piece == BISHOP) white_bishops = white_bishops + 1
-            IF (piece == PAWN) white_pawn_on_file(sq%file) = .TRUE.
+            IF (piece == PAWN) THEN
+                white_pawn_on_file(sq%file) = .TRUE.
+                white_pawn_count(sq%file) = white_pawn_count(sq%file) + 1
+            END IF
+            IF (piece == KING) THEN
+                white_king_r = sq%rank; white_king_f = sq%file
+            END IF
         END DO
         DO i = 1, board%num_black_pieces
             sq = board%black_pieces(i)
             piece = board%squares_piece(sq%rank, sq%file)
             IF (piece == BISHOP) black_bishops = black_bishops + 1
-            IF (piece == PAWN) black_pawn_on_file(sq%file) = .TRUE.
+            IF (piece == PAWN) THEN
+                black_pawn_on_file(sq%file) = .TRUE.
+                black_pawn_count(sq%file) = black_pawn_count(sq%file) + 1
+            END IF
+            IF (piece == KING) THEN
+                black_king_r = sq%rank; black_king_f = sq%file
+            END IF
         END DO
 
         ! --- Evaluate Pieces (mg/eg components) ---
@@ -289,6 +314,35 @@ CONTAINS
                     eg_score = eg_score + PASSED_PAWN_BONUS_EG(r)
                 END IF
             END IF
+
+            ! Knight/Bishop mobility: count available squares
+            IF (piece == KNIGHT) THEN
+                mobility = 0
+                DO dir_idx = 1, 8
+                    nr = r + KNIGHT_DELTAS(dir_idx, 1)
+                    nf = f + KNIGHT_DELTAS(dir_idx, 2)
+                    IF (nr >= 1 .AND. nr <= BOARD_SIZE .AND. nf >= 1 .AND. nf <= BOARD_SIZE) THEN
+                        IF (board%squares_color(nr, nf) /= WHITE) mobility = mobility + 1
+                    END IF
+                END DO
+                mg_score = mg_score + mobility * MOBILITY_BONUS_MG
+                eg_score = eg_score + mobility * MOBILITY_BONUS_EG
+            ELSE IF (piece == BISHOP) THEN
+                mobility = 0
+                DO dir_idx = 1, 4
+                    dr = BISHOP_DIRS(dir_idx, 1)
+                    df = BISHOP_DIRS(dir_idx, 2)
+                    nr = r + dr; nf = f + df
+                    DO WHILE (nr >= 1 .AND. nr <= BOARD_SIZE .AND. nf >= 1 .AND. nf <= BOARD_SIZE)
+                        IF (board%squares_color(nr, nf) == WHITE) EXIT
+                        mobility = mobility + 1
+                        IF (board%squares_piece(nr, nf) /= NO_PIECE) EXIT
+                        nr = nr + dr; nf = nf + df
+                    END DO
+                END DO
+                mg_score = mg_score + mobility * MOBILITY_BONUS_MG
+                eg_score = eg_score + mobility * MOBILITY_BONUS_EG
+            END IF
         END DO
 
         ! Evaluate black pieces
@@ -335,6 +389,35 @@ CONTAINS
                     eg_score = eg_score - PASSED_PAWN_BONUS_EG(BOARD_SIZE - r + 1)
                 END IF
             END IF
+
+            ! Knight/Bishop mobility
+            IF (piece == KNIGHT) THEN
+                mobility = 0
+                DO dir_idx = 1, 8
+                    nr = r + KNIGHT_DELTAS(dir_idx, 1)
+                    nf = f + KNIGHT_DELTAS(dir_idx, 2)
+                    IF (nr >= 1 .AND. nr <= BOARD_SIZE .AND. nf >= 1 .AND. nf <= BOARD_SIZE) THEN
+                        IF (board%squares_color(nr, nf) /= BLACK) mobility = mobility + 1
+                    END IF
+                END DO
+                mg_score = mg_score - mobility * MOBILITY_BONUS_MG
+                eg_score = eg_score - mobility * MOBILITY_BONUS_EG
+            ELSE IF (piece == BISHOP) THEN
+                mobility = 0
+                DO dir_idx = 1, 4
+                    dr = BISHOP_DIRS(dir_idx, 1)
+                    df = BISHOP_DIRS(dir_idx, 2)
+                    nr = r + dr; nf = f + df
+                    DO WHILE (nr >= 1 .AND. nr <= BOARD_SIZE .AND. nf >= 1 .AND. nf <= BOARD_SIZE)
+                        IF (board%squares_color(nr, nf) == BLACK) EXIT
+                        mobility = mobility + 1
+                        IF (board%squares_piece(nr, nf) /= NO_PIECE) EXIT
+                        nr = nr + dr; nf = nf + df
+                    END DO
+                END DO
+                mg_score = mg_score - mobility * MOBILITY_BONUS_MG
+                eg_score = eg_score - mobility * MOBILITY_BONUS_EG
+            END IF
         END DO
 
         ! Bishop pair bonus
@@ -346,6 +429,66 @@ CONTAINS
             mg_score = mg_score - BISHOP_PAIR_MG
             eg_score = eg_score - BISHOP_PAIR_EG
         END IF
+
+        ! Doubled and isolated pawn penalties
+        DO f = 1, BOARD_SIZE
+            ! Doubled pawns: more than one pawn on same file
+            IF (white_pawn_count(f) > 1) THEN
+                mg_score = mg_score + DOUBLED_PAWN_MG * (white_pawn_count(f) - 1)
+                eg_score = eg_score + DOUBLED_PAWN_EG * (white_pawn_count(f) - 1)
+            END IF
+            IF (black_pawn_count(f) > 1) THEN
+                mg_score = mg_score - DOUBLED_PAWN_MG * (black_pawn_count(f) - 1)
+                eg_score = eg_score - DOUBLED_PAWN_EG * (black_pawn_count(f) - 1)
+            END IF
+            ! Isolated pawns: no friendly pawns on adjacent files
+            IF (white_pawn_on_file(f)) THEN
+                has_adj_pawn = .FALSE.
+                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f - 1)
+                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f + 1)
+                IF (.NOT. has_adj_pawn) THEN
+                    mg_score = mg_score + ISOLATED_PAWN_MG
+                    eg_score = eg_score + ISOLATED_PAWN_EG
+                END IF
+            END IF
+            IF (black_pawn_on_file(f)) THEN
+                has_adj_pawn = .FALSE.
+                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f - 1)
+                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f + 1)
+                IF (.NOT. has_adj_pawn) THEN
+                    mg_score = mg_score - ISOLATED_PAWN_MG
+                    eg_score = eg_score - ISOLATED_PAWN_EG
+                END IF
+            END IF
+        END DO
+
+        ! King safety: pawn shield bonus (middlegame only)
+        ! Check pawns in front of white king
+        DO df = -1, 1
+            shield_f = white_king_f + df
+            IF (shield_f >= 1 .AND. shield_f <= BOARD_SIZE) THEN
+                shield_r = white_king_r + 1
+                IF (shield_r >= 1 .AND. shield_r <= BOARD_SIZE) THEN
+                    IF (board%squares_piece(shield_r, shield_f) == PAWN .AND. &
+                        board%squares_color(shield_r, shield_f) == WHITE) THEN
+                        mg_score = mg_score + PAWN_SHIELD_BONUS
+                    END IF
+                END IF
+            END IF
+        END DO
+        ! Check pawns in front of black king
+        DO df = -1, 1
+            shield_f = black_king_f + df
+            IF (shield_f >= 1 .AND. shield_f <= BOARD_SIZE) THEN
+                shield_r = black_king_r - 1
+                IF (shield_r >= 1 .AND. shield_r <= BOARD_SIZE) THEN
+                    IF (board%squares_piece(shield_r, shield_f) == PAWN .AND. &
+                        board%squares_color(shield_r, shield_f) == BLACK) THEN
+                        mg_score = mg_score - PAWN_SHIELD_BONUS
+                    END IF
+                END IF
+            END IF
+        END DO
 
         evaluate_board = tapered_pst_value(mg_score, eg_score, phase, TOTAL_PHASE)
         IF (board%current_player == BLACK) evaluate_board = -evaluate_board

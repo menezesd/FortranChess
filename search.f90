@@ -32,7 +32,7 @@ CONTAINS
         INTEGER, INTENT(IN) :: ply
         INTEGER, INTENT(IN) :: alpha, beta
 
-        INTEGER :: stand_pat, current_alpha, i, delta
+        INTEGER :: stand_pat = 0, current_alpha, i, delta
         TYPE(Move_Type), DIMENSION(MAX_MOVES) :: moves
         INTEGER :: num_moves
         TYPE(Move_Type) :: current_move
@@ -86,6 +86,8 @@ CONTAINS
                 delta = stand_pat + DELTA_PIECE_VAL(current_move%captured_piece) + DELTA_MARGIN
                 IF (current_move%promotion_piece /= NO_PIECE) delta = delta + 800
                 IF (delta < current_alpha) CYCLE
+                ! SEE pruning: skip losing captures
+                IF (see_capture(board, current_move) < 0) CYCLE
             END IF
 
             CALL make_move(board, current_move, unmake_info)
@@ -149,6 +151,13 @@ CONTAINS
         INTEGER(KIND=8) :: prev_key
         INTEGER :: prev_halfmove_clock, prev_fullmove_number, prev_repetition_count
         INTEGER :: current_depth ! Local variable for depth, can be modified
+        INTEGER :: static_eval
+        LOGICAL :: can_futility_prune
+        ! Pruning margins
+        INTEGER, PARAMETER :: FUTILITY_MARGIN_D1 = 200
+        INTEGER, PARAMETER :: FUTILITY_MARGIN_D2 = 500
+        INTEGER, PARAMETER :: REVERSE_FUTILITY_MARGIN = 200
+        INTEGER, PARAMETER :: RAZOR_MARGIN = 400
 
         current_depth = depth_param
 
@@ -233,6 +242,29 @@ CONTAINS
             END IF
         END IF
 
+        ! --- Static eval for pruning decisions ---
+        static_eval = evaluate_board(board)
+
+        ! --- Reverse Futility Pruning (Static Null Move Pruning) ---
+        ! If static eval is well above beta at shallow depth, the position is so good
+        ! that a full search is unlikely to change the result.
+        IF (.NOT. in_check .AND. current_depth <= 3 .AND. &
+            static_eval - REVERSE_FUTILITY_MARGIN * current_depth >= beta) THEN
+            best_score = static_eval - REVERSE_FUTILITY_MARGIN * current_depth
+            RETURN
+        END IF
+
+        ! --- Razoring ---
+        ! If static eval is far below alpha at low depth, drop into qsearch
+        IF (.NOT. in_check .AND. current_depth <= 2 .AND. &
+            static_eval + RAZOR_MARGIN * current_depth <= alpha) THEN
+            score = quiescence(board, ply, alpha, beta)
+            IF (score <= alpha) THEN
+                best_score = score
+                RETURN
+            END IF
+        END IF
+
         ! Generate all legal moves for current position
         CALL generate_moves(board, moves, num_moves)
 
@@ -246,6 +278,27 @@ CONTAINS
                  best_score = 0
              END IF
              RETURN
+        END IF
+
+        ! --- Internal Iterative Deepening (IID) ---
+        ! When no TT move is available at sufficient depth, do a shallow search
+        ! to find a good move for ordering.
+        IF (tt_entry%best_move%from_sq%rank == 0 .AND. current_depth >= 4 .AND. .NOT. in_check) THEN
+            next_alpha = -beta
+            next_beta = -alpha
+            score = -negamax(board, current_depth - 2, ply, next_alpha, next_beta)
+            ! Re-probe TT after IID search to get the best move it found
+            tt_hit = probe_tt(board%zobrist_key, 0, ply, alpha, beta, tt_entry)
+        END IF
+
+        ! --- Futility pruning flag ---
+        can_futility_prune = .FALSE.
+        IF (.NOT. in_check .AND. current_depth <= 2) THEN
+            IF (current_depth == 1 .AND. static_eval + FUTILITY_MARGIN_D1 <= alpha) THEN
+                can_futility_prune = .TRUE.
+            ELSE IF (current_depth == 2 .AND. static_eval + FUTILITY_MARGIN_D2 <= alpha) THEN
+                can_futility_prune = .TRUE.
+            END IF
         END IF
 
         ! Order moves with killers and history heuristic
@@ -277,6 +330,14 @@ CONTAINS
             ! Make the move on the board
             CALL make_move(board, current_move, unmake_info)
             gives_check = is_in_check(board, board%current_player)
+
+            ! --- Futility pruning: skip quiet moves that can't raise alpha ---
+            ! Must be after make_move so we can check if the move gives check
+            IF (can_futility_prune .AND. is_quiet .AND. i > 1 .AND. &
+                .NOT. current_move%is_castling .AND. .NOT. gives_check) THEN
+                CALL unmake_move(board, current_move, unmake_info)
+                CYCLE
+            END IF
 
             ! --- Late Move Reductions (LMR) ---
             ! Reduce depth for late quiet moves that don't give check
