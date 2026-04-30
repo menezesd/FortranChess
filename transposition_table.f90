@@ -62,9 +62,17 @@ CONTAINS
 
     ! --- Initialize Zobrist Keys ---
     SUBROUTINE init_zobrist_keys()
-        INTEGER :: i, j, k, l
-        ! Seed the random number generator
-        CALL RANDOM_SEED()
+        INTEGER :: i, j, k, l, seed_size
+        INTEGER, ALLOCATABLE :: seed(:)
+
+        ! Use a fixed seed so hash keys are reproducible across runs.
+        CALL RANDOM_SEED(size=seed_size)
+        ALLOCATE(seed(seed_size))
+        DO i = 1, seed_size
+            seed(i) = 104729 + 37 * (i - 1)
+        END DO
+        CALL RANDOM_SEED(put=seed)
+        DEALLOCATE(seed)
 
         ! Generate random keys for each piece on each square
         DO i = 1, 6 ! Piece types

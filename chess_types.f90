@@ -80,11 +80,11 @@ MODULE Chess_Types
         LOGICAL           :: prev_bc_k = .FALSE.
         LOGICAL           :: prev_bc_q = .FALSE.
         INTEGER(KIND=8)   :: prev_zobrist_key = 0
+        INTEGER(KIND=8)   :: prev_pawn_hash_key = 0
         INTEGER           :: prev_halfmove_clock = 0
         INTEGER           :: prev_fullmove_number = 1
         INTEGER           :: prev_repetition_count = 0
-        INTEGER(KIND=8)   :: prev_repetition_entry = 0
-        LOGICAL           :: repetition_was_reset = .FALSE.
+        INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: prev_repetition_history = 0
     END TYPE UnmakeInfo_Type
 
     ! --- Derived Type for Board State ---
@@ -106,6 +106,7 @@ MODULE Chess_Types
         INTEGER :: halfmove_clock = 0
         INTEGER :: fullmove_number = 1
         INTEGER(KIND=8) :: zobrist_key = 0
+        INTEGER(KIND=8) :: pawn_hash_key = 0
         INTEGER(KIND=8), DIMENSION(MAX_GAME_HISTORY) :: repetition_history = 0
         INTEGER :: repetition_count = 0
     END TYPE Board_Type

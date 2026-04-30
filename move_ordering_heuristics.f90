@@ -1,6 +1,7 @@
 MODULE Move_Ordering_Heuristics
     USE Chess_Types, ONLY: get_piece_order, Move_Type, Board_Type, NO_PIECE, MAX_MOVES, &
         PAWN, KNIGHT, BISHOP, WHITE, BLACK, BOARD_SIZE, KING, QUEEN, ROOK
+    USE Board_Utils, ONLY: see_capture
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: clear_killers, store_killer, is_killer, moves_equal, order_moves_with_killers, &
@@ -130,7 +131,7 @@ CONTAINS
         INTEGER :: i, j
         TYPE(Move_Type) :: temp_move
         INTEGER, DIMENSION(MAX_MOVES) :: scores
-        INTEGER :: piece_val, captured_val, temp_score
+        INTEGER :: piece_val, captured_val, temp_score, see_score
         INTEGER :: piece_moved, mover_color, quiet_bonus
         INTEGER :: history_score
 
@@ -144,7 +145,8 @@ CONTAINS
                 piece_val = get_piece_order(board%squares_piece( &
                     move_list(i)%from_sq%rank, move_list(i)%from_sq%file))
                 captured_val = get_piece_order(move_list(i)%captured_piece) * 10
-                scores(i) = 10000 + captured_val - piece_val
+                see_score = see_capture(board, move_list(i)) / 10
+                scores(i) = 10000 + captured_val - piece_val + see_score
             ELSE IF (is_killer(move_list(i), ply)) THEN
                 ! Killer moves get medium scores (5000-5001)
                 DO j = 1, NUM_KILLERS

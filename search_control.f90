@@ -1,5 +1,5 @@
 MODULE Search_Control
-    USE, INTRINSIC :: iso_c_binding, ONLY: c_int, c_size_t, c_long, c_char
+    USE, INTRINSIC :: iso_c_binding, ONLY: c_int, c_size_t, c_long, c_char, c_short
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: begin_search_polling, end_search_polling, poll_search_stop, &
@@ -7,9 +7,14 @@ MODULE Search_Control
               has_buffered_command, pop_buffered_command, read_next_command
 
     INTEGER(c_int), PARAMETER :: STDIN_FD = 0_c_int
-    INTEGER(c_int), PARAMETER :: F_GETFL = 3_c_int
-    INTEGER(c_int), PARAMETER :: F_SETFL = 4_c_int
     INTEGER(c_int), PARAMETER :: O_NONBLOCK = int(Z'00000004', c_int)
+    INTEGER(c_short), PARAMETER :: POLLIN = 1_c_short
+
+    TYPE, BIND(C) :: pollfd_type
+        INTEGER(c_int) :: fd
+        INTEGER(c_short) :: events
+        INTEGER(c_short) :: revents
+    END TYPE pollfd_type
 
     LOGICAL :: stop_requested = .FALSE.
     LOGICAL :: quit_requested = .FALSE.
@@ -19,18 +24,24 @@ MODULE Search_Control
     INTEGER :: search_start_count = 0
     INTEGER :: search_count_rate = 0
     INTEGER :: search_time_limit_ms = -1
-    CHARACTER(LEN=512) :: pending_command = ''
+    CHARACTER(LEN=4096) :: pending_command = ''
     INTEGER :: pending_len = 0
     INTEGER, PARAMETER :: MAX_BUFFERED_COMMANDS = 16
-    CHARACTER(LEN=512), DIMENSION(MAX_BUFFERED_COMMANDS) :: buffered_commands = ''
+    CHARACTER(LEN=4096), DIMENSION(MAX_BUFFERED_COMMANDS) :: buffered_commands = ''
     INTEGER :: buffered_count = 0
 
     INTERFACE
-        FUNCTION c_fcntl(fd, cmd, arg) BIND(C, NAME="fcntl") RESULT(res)
+        FUNCTION c_fcntl_getfl(fd) BIND(C, NAME="c_fcntl_getfl") RESULT(res)
             IMPORT :: c_int
-            INTEGER(c_int), VALUE :: fd, cmd, arg
+            INTEGER(c_int), VALUE :: fd
             INTEGER(c_int) :: res
-        END FUNCTION c_fcntl
+        END FUNCTION c_fcntl_getfl
+
+        FUNCTION c_fcntl_setfl(fd, flags) BIND(C, NAME="c_fcntl_setfl") RESULT(res)
+            IMPORT :: c_int
+            INTEGER(c_int), VALUE :: fd, flags
+            INTEGER(c_int) :: res
+        END FUNCTION c_fcntl_setfl
 
         FUNCTION c_read(fd, buf, count) BIND(C, NAME="read") RESULT(res)
             IMPORT :: c_int, c_size_t, c_long, c_char
@@ -39,6 +50,14 @@ MODULE Search_Control
             INTEGER(c_size_t), VALUE :: count
             INTEGER(c_long) :: res
         END FUNCTION c_read
+
+        FUNCTION c_poll(fds, nfds, timeout) BIND(C, NAME="poll") RESULT(res)
+            IMPORT :: pollfd_type, c_int
+            TYPE(pollfd_type), DIMENSION(*), INTENT(INOUT) :: fds
+            INTEGER(c_int), VALUE :: nfds
+            INTEGER(c_int), VALUE :: timeout
+            INTEGER(c_int) :: res
+        END FUNCTION c_poll
     END INTERFACE
 
 CONTAINS
@@ -57,12 +76,12 @@ CONTAINS
         INTEGER(c_int) :: flags
 
         CALL reset_search_stop()
-        flags = c_fcntl(STDIN_FD, F_GETFL, 0_c_int)
+        flags = c_fcntl_getfl(STDIN_FD)
         IF (flags < 0_c_int) RETURN
 
         saved_flags = flags
         IF (IAND(flags, O_NONBLOCK) == 0_c_int) THEN
-            IF (c_fcntl(STDIN_FD, F_SETFL, IOR(flags, O_NONBLOCK)) < 0_c_int) THEN
+            IF (c_fcntl_setfl(STDIN_FD, IOR(flags, O_NONBLOCK)) < 0_c_int) THEN
                 saved_flags = -1_c_int
                 RETURN
             END IF
@@ -85,7 +104,7 @@ CONTAINS
         INTEGER(c_int) :: rc
 
         IF (polling_enabled .AND. saved_flags >= 0_c_int) THEN
-            rc = c_fcntl(STDIN_FD, F_SETFL, saved_flags)
+            rc = c_fcntl_setfl(STDIN_FD, saved_flags)
         END IF
         polling_enabled = .FALSE.
         timed_search_enabled = .FALSE.
@@ -110,8 +129,10 @@ CONTAINS
         END IF
 
         DO
+            IF (.NOT. stdin_ready()) EXIT
+
             bytes_read = c_read(STDIN_FD, buffer, SIZE(buffer, KIND=c_size_t))
-            IF (bytes_read <= 0_c_long) THEN
+            IF (bytes_read == 0_c_long) THEN
                 IF (pending_len > 0) THEN
                     CALL flush_pending_command_for_search()
                     IF (stop_requested) THEN
@@ -119,6 +140,8 @@ CONTAINS
                         RETURN
                     END IF
                 END IF
+                EXIT
+            ELSE IF (bytes_read < 0_c_long) THEN
                 EXIT
             END IF
 
@@ -208,7 +231,7 @@ CONTAINS
 
     SUBROUTINE consume_char(ch)
         CHARACTER(LEN=1), INTENT(IN) :: ch
-        CHARACTER(LEN=512) :: trimmed
+        CHARACTER(LEN=4096) :: trimmed
 
         SELECT CASE (ch)
         CASE (NEW_LINE('a'), CHAR(13))
@@ -252,7 +275,7 @@ CONTAINS
 
     SUBROUTINE consume_buffered_control_commands()
         INTEGER :: i, keep_count
-        CHARACTER(LEN=512) :: command
+        CHARACTER(LEN=4096) :: command
 
         keep_count = 0
         DO i = 1, buffered_count
@@ -278,7 +301,7 @@ CONTAINS
     END SUBROUTINE consume_buffered_control_commands
 
     SUBROUTINE flush_pending_command_to_buffer()
-        CHARACTER(LEN=512) :: trimmed
+        CHARACTER(LEN=4096) :: trimmed
 
         IF (pending_len <= 0) RETURN
         trimmed = TRIM(ADJUSTL(pending_command(:pending_len)))
@@ -290,7 +313,7 @@ CONTAINS
     END SUBROUTINE flush_pending_command_to_buffer
 
     SUBROUTINE flush_pending_command_for_search()
-        CHARACTER(LEN=512) :: trimmed
+        CHARACTER(LEN=4096) :: trimmed
 
         IF (pending_len <= 0) RETURN
         trimmed = TRIM(ADJUSTL(pending_command(:pending_len)))
@@ -313,7 +336,7 @@ CONTAINS
 
     SUBROUTINE consume_buffered_char(ch)
         CHARACTER(LEN=1), INTENT(IN) :: ch
-        CHARACTER(LEN=512) :: trimmed
+        CHARACTER(LEN=4096) :: trimmed
 
         SELECT CASE (ch)
         CASE (NEW_LINE('a'), CHAR(13))
@@ -346,5 +369,18 @@ CONTAINS
         elapsed_ms = 1000.0 * REAL(current_count - search_start_count) / REAL(search_count_rate)
         reached = (elapsed_ms >= REAL(search_time_limit_ms))
     END FUNCTION deadline_reached
+
+    LOGICAL FUNCTION stdin_ready() RESULT(is_ready)
+        TYPE(pollfd_type) :: descriptor(1)
+        INTEGER(c_int) :: poll_result
+
+        descriptor(1)%fd = STDIN_FD
+        descriptor(1)%events = POLLIN
+        descriptor(1)%revents = 0_c_short
+
+        poll_result = c_poll(descriptor, 1_c_int, 0_c_int)
+        is_ready = (poll_result > 0_c_int .AND. &
+            IAND(INT(descriptor(1)%revents, KIND=c_int), INT(POLLIN, KIND=c_int)) /= 0_c_int)
+    END FUNCTION stdin_ready
 
 END MODULE Search_Control

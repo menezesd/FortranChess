@@ -1,6 +1,6 @@
 MODULE UCI_Driver
     USE Chess_Types
-    USE Board_Utils, ONLY: char_to_file, char_to_rank, file_rank_to_sq, init_board
+    USE Board_Utils, ONLY: char_to_file, char_to_rank, file_rank_to_sq, init_board, compute_pawn_hash
     USE Move_Generation, ONLY: generate_moves
     USE Make_Unmake, ONLY: make_move
     USE Search, ONLY: find_best_move, search_node_count
@@ -10,13 +10,13 @@ MODULE UCI_Driver
     USE Evaluation, ONLY: evaluate_board
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: run_uci_mode
+    PUBLIC :: run_uci_mode, set_board_from_fen
 
 CONTAINS
 
     SUBROUTINE run_uci_mode()
         TYPE(Board_Type) :: board
-        CHARACTER(LEN=256) :: line
+        CHARACTER(LEN=4096) :: line
         LOGICAL :: has_command
 
         CALL init_zobrist_keys()
@@ -118,7 +118,8 @@ CONTAINS
         l = LEN_TRIM(moves_str)
         start = 1
         DO WHILE (start <= l)
-            DO WHILE (start <= l .AND. moves_str(start:start) == ' ')
+            DO WHILE (start <= l)
+                IF (moves_str(start:start) /= ' ') EXIT
                 start = start + 1
             END DO
             IF (start > l) EXIT
@@ -238,6 +239,7 @@ CONTAINS
         parsed_board%halfmove_clock = halfmove_clock
         parsed_board%fullmove_number = fullmove_number
         parsed_board%zobrist_key = compute_zobrist_hash(parsed_board)
+        parsed_board%pawn_hash_key = compute_pawn_hash(parsed_board)
         parsed_board%repetition_count = 1
         parsed_board%repetition_history(1) = parsed_board%zobrist_key
         board = parsed_board
@@ -633,13 +635,15 @@ CONTAINS
         i = MAX(start_pos, 1)
 
         DO WHILE (i <= l)
-            DO WHILE (i <= l .AND. line(i:i) == ' ')
+            DO WHILE (i <= l)
+                IF (line(i:i) /= ' ') EXIT
                 i = i + 1
             END DO
             IF (i > l) EXIT
 
             j = i
-            DO WHILE (j <= l .AND. line(j:j) /= ' ')
+            DO WHILE (j <= l)
+                IF (line(j:j) == ' ') EXIT
                 j = j + 1
             END DO
 
@@ -655,10 +659,21 @@ CONTAINS
 
     INTEGER FUNCTION derive_time_ms(side_to_move, movetime, wtime, btime, winc, binc, movestogo) RESULT(ms)
         INTEGER, INTENT(IN) :: side_to_move, movetime, wtime, btime, winc, binc, movestogo
-        INTEGER :: pool, inc, moves_left
+        INTEGER, PARAMETER :: MOVE_OVERHEAD_MS = 50
+        INTEGER, PARAMETER :: CRITICAL_MARGIN_MS = 50
+        INTEGER, PARAMETER :: PANIC_THRESHOLD_MS = 5000
+        INTEGER, PARAMETER :: LONG_TC_MS = 300000
+        INTEGER, PARAMETER :: MEDIUM_TC_MS = 60000
+        INTEGER, PARAMETER :: MIN_MOVES_TO_GO = 10
+        INTEGER, PARAMETER :: LONG_MOVES_ESTIMATE = 40
+        INTEGER, PARAMETER :: MEDIUM_MOVES_ESTIMATE = 30
+        INTEGER, PARAMETER :: SHORT_MOVES_ESTIMATE = 25
+        INTEGER, PARAMETER :: SOFT_TIME_PERCENT = 70
+        INTEGER :: pool, inc, moves_left, safe_ms, base_time, soft_cap
+        REAL :: panic_factor
 
         IF (movetime >= 0) THEN
-            ms = movetime
+            ms = MAX(movetime, 1)
             RETURN
         END IF
 
@@ -670,18 +685,41 @@ CONTAINS
             inc = binc
         END IF
 
-        IF (movestogo > 0) THEN
-            moves_left = movestogo
-        ELSE
-            moves_left = 30
+        IF (pool <= 0) THEN
+            ms = 1000
+            RETURN
         END IF
 
-        IF (pool <= 0) THEN
-            ms = 2000 ! fallback
-        ELSE
-            ms = pool / moves_left + inc * 4 / 5
-            IF (ms < 200) ms = 200
+        IF (pool <= MOVE_OVERHEAD_MS + CRITICAL_MARGIN_MS) THEN
+            ms = MAX(pool / 2, 1)
+            RETURN
         END IF
+
+        safe_ms = MAX(pool - MOVE_OVERHEAD_MS, 1)
+
+        IF (safe_ms < PANIC_THRESHOLD_MS) THEN
+            panic_factor = REAL(safe_ms) / REAL(PANIC_THRESHOLD_MS)
+            ms = INT(REAL(safe_ms) * 0.05 * panic_factor) + inc
+            ms = MIN(ms, MAX(safe_ms / 5, 1))
+            ms = MAX(ms, 1)
+            RETURN
+        END IF
+
+        IF (movestogo > 0) THEN
+            moves_left = movestogo
+        ELSE IF (safe_ms > LONG_TC_MS) THEN
+            moves_left = LONG_MOVES_ESTIMATE
+        ELSE IF (safe_ms > MEDIUM_TC_MS) THEN
+            moves_left = MEDIUM_MOVES_ESTIMATE
+        ELSE
+            moves_left = SHORT_MOVES_ESTIMATE
+        END IF
+        moves_left = MAX(moves_left, MIN_MOVES_TO_GO)
+
+        base_time = safe_ms / moves_left + inc
+        soft_cap = safe_ms * SOFT_TIME_PERCENT / 100
+        ms = MIN(base_time, soft_cap)
+        ms = MAX(ms, 1)
     END FUNCTION derive_time_ms
 
     LOGICAL FUNCTION is_go_keyword(token) RESULT(is_keyword)

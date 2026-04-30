@@ -56,9 +56,11 @@ CONTAINS
         unmake_info%prev_bc_k = board%bc_k
         unmake_info%prev_bc_q = board%bc_q
         unmake_info%prev_zobrist_key = board%zobrist_key
+        unmake_info%prev_pawn_hash_key = board%pawn_hash_key
         unmake_info%prev_halfmove_clock = board%halfmove_clock
         unmake_info%prev_fullmove_number = board%fullmove_number
         unmake_info%prev_repetition_count = board%repetition_count
+        unmake_info%prev_repetition_history = board%repetition_history
 
         piece_moved = board%squares_piece(r_from, f_from)
         color_moved = board%squares_color(r_from, f_from)
@@ -209,17 +211,27 @@ CONTAINS
 
         board%zobrist_key = hash
 
+        hash = unmake_info%prev_pawn_hash_key
+        IF (piece_moved == PAWN) THEN
+            hash = IEOR(hash, ZOBRIST_PIECES(PAWN, player_color, r_from, f_from))
+            IF (move%promotion_piece == NO_PIECE) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(PAWN, player_color, r_to, f_to))
+            END IF
+        END IF
+        IF (move%is_en_passant) THEN
+            hash = IEOR(hash, ZOBRIST_PIECES(PAWN, opponent_color, &
+                unmake_info%captured_sq%rank, unmake_info%captured_sq%file))
+        ELSE IF (unmake_info%captured_piece_type == PAWN) THEN
+            hash = IEOR(hash, ZOBRIST_PIECES(PAWN, unmake_info%captured_piece_color, r_to, f_to))
+        END IF
+        board%pawn_hash_key = hash
+
         ! 5c. Update repetition history
         IF (piece_moved == PAWN .OR. unmake_info%captured_piece_type /= NO_PIECE) THEN
-            ! Irreversible move: save overwritten entry, reset tracking
-            unmake_info%repetition_was_reset = .TRUE.
-            IF (board%repetition_count > 0) THEN
-                unmake_info%prev_repetition_entry = board%repetition_history(1)
-            END IF
+            ! Irreversible move: reset repetition tracking from the new position.
             board%repetition_count = 1
             board%repetition_history(1) = board%zobrist_key
         ELSE
-            unmake_info%repetition_was_reset = .FALSE.
             IF (board%repetition_count < MAX_GAME_HISTORY) THEN
                 board%repetition_count = board%repetition_count + 1
             END IF
@@ -273,12 +285,11 @@ CONTAINS
         board%bc_k = unmake_info%prev_bc_k
         board%bc_q = unmake_info%prev_bc_q
         board%zobrist_key = unmake_info%prev_zobrist_key
+        board%pawn_hash_key = unmake_info%prev_pawn_hash_key
         board%halfmove_clock = unmake_info%prev_halfmove_clock
         board%fullmove_number = unmake_info%prev_fullmove_number
         board%repetition_count = unmake_info%prev_repetition_count
-        IF (unmake_info%repetition_was_reset .AND. unmake_info%prev_repetition_count > 0) THEN
-            board%repetition_history(1) = unmake_info%prev_repetition_entry
-        END IF
+        board%repetition_history = unmake_info%prev_repetition_history
 
         ! 3. Reverse Piece Movements
         r_from = move%from_sq%rank; f_from = move%from_sq%file

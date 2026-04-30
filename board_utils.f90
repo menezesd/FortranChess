@@ -13,7 +13,7 @@ MODULE Board_Utils
               find_king, is_in_check, update_piece_lists, &
               update_piece_lists_unmake, remove_from_piece_list, &
               update_piece_position, add_to_piece_list, &
-              is_fifty_move_draw, is_threefold_repetition, see_capture
+              is_fifty_move_draw, is_threefold_repetition, see_capture, compute_pawn_hash
 
 CONTAINS
 
@@ -176,11 +176,35 @@ CONTAINS
 
         ! Compute initial Zobrist key
         board%zobrist_key = compute_zobrist_hash(board)
+        board%pawn_hash_key = compute_pawn_hash(board)
         board%repetition_history = 0
         board%repetition_count = 1
         board%repetition_history(1) = board%zobrist_key
 
     END SUBROUTINE init_board
+
+    FUNCTION compute_pawn_hash(board) RESULT(hash)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER(KIND=8) :: hash
+        INTEGER :: i
+        TYPE(Square_Type) :: sq
+
+        hash = 0_8
+
+        DO i = 1, board%num_white_pieces
+            sq = board%white_pieces(i)
+            IF (board%squares_piece(sq%rank, sq%file) == PAWN) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(PAWN, WHITE, sq%rank, sq%file))
+            END IF
+        END DO
+
+        DO i = 1, board%num_black_pieces
+            sq = board%black_pieces(i)
+            IF (board%squares_piece(sq%rank, sq%file) == PAWN) THEN
+                hash = IEOR(hash, ZOBRIST_PIECES(PAWN, BLACK, sq%rank, sq%file))
+            END IF
+        END DO
+    END FUNCTION compute_pawn_hash
 
     ! --- Print Board to Console ---
     ! Displays the current board state in a human-readable format.

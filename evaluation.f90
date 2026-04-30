@@ -19,6 +19,18 @@ MODULE Evaluation
     ! Material values and PSTs borrowed from chess.cpp (mg/eg tapered eval)
     INTEGER, PARAMETER :: MATERIAL_MG(6) = (/ 82, 337, 365, 477, 1025, 20000 /)
     INTEGER, PARAMETER :: MATERIAL_EG(6) = (/ 94, 281, 297, 512, 936, 20000 /)
+    INTEGER, PARAMETER :: PAWN_HASH_SIZE = 2**15
+
+    TYPE :: Pawn_Hash_Entry_Type
+        LOGICAL :: valid = .FALSE.
+        INTEGER(KIND=8) :: key = 0
+        INTEGER :: mg = 0
+        INTEGER :: eg = 0
+        INTEGER, DIMENSION(BOARD_SIZE) :: white_pawn_count = 0
+        INTEGER, DIMENSION(BOARD_SIZE) :: black_pawn_count = 0
+    END TYPE Pawn_Hash_Entry_Type
+
+    TYPE(Pawn_Hash_Entry_Type), DIMENSION(PAWN_HASH_SIZE) :: pawn_hash_table
 
     INTEGER, PARAMETER, DIMENSION(8, 8) :: PAWN_PSTM = RESHAPE( (/ &
         0, 0, 0, 0, 0, 0, 0, 0, &
@@ -197,80 +209,33 @@ CONTAINS
         INTEGER :: i, r, f, piece, eval_rank
         INTEGER :: phase
         TYPE(Square_Type) :: sq
-        INTEGER :: mg_score, eg_score
+        INTEGER :: mg_score, eg_score, pawn_mg, pawn_eg
         INTEGER :: mg_pst, eg_pst
         INTEGER :: white_bishops, black_bishops
         INTEGER :: white_pawn_count(BOARD_SIZE), black_pawn_count(BOARD_SIZE)
         LOGICAL :: white_pawn_on_file(BOARD_SIZE), black_pawn_on_file(BOARD_SIZE)
-        INTEGER :: pr, blocked
         INTEGER :: white_king_r, white_king_f, black_king_r, black_king_f
         INTEGER :: shield_r, shield_f, mobility, nr, nf, dr, df, dir_idx
-        LOGICAL :: has_adj_pawn
 
         ! --- Bonus/penalty constants ---
         INTEGER, PARAMETER :: BISHOP_PAIR_MG = 30, BISHOP_PAIR_EG = 50
         INTEGER, PARAMETER :: ROOK_OPEN_FILE_MG = 20, ROOK_OPEN_FILE_EG = 10
         INTEGER, PARAMETER :: ROOK_SEMI_OPEN_MG = 10, ROOK_SEMI_OPEN_EG = 5
-        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_MG(8) = (/ 0, 5, 10, 20, 35, 60, 100, 0 /)
-        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_EG(8) = (/ 0, 10, 20, 40, 70, 120, 200, 0 /)
-        INTEGER, PARAMETER :: DOUBLED_PAWN_MG = -10, DOUBLED_PAWN_EG = -20
-        INTEGER, PARAMETER :: ISOLATED_PAWN_MG = -15, ISOLATED_PAWN_EG = -20
-        INTEGER, PARAMETER :: CONNECTED_PAWN_MG = 7, CONNECTED_PAWN_EG = 5
         INTEGER, PARAMETER :: PAWN_SHIELD_BONUS = 10
         INTEGER, PARAMETER :: MOBILITY_BONUS_MG = 4, MOBILITY_BONUS_EG = 3
 
-        ! --- Calculate Game Phase ---
-        phase = 0
-        DO i = 1, board%num_white_pieces
-            sq = board%white_pieces(i)
-            piece = board%squares_piece(sq%rank, sq%file)
-            phase = phase + get_piece_phase(piece)
-        END DO
-        DO i = 1, board%num_black_pieces
-            sq = board%black_pieces(i)
-            piece = board%squares_piece(sq%rank, sq%file)
-            phase = phase + get_piece_phase(piece)
-        END DO
-        phase = MIN(phase, TOTAL_PHASE)
+        CALL evaluate_pawns_cached(board, pawn_mg, pawn_eg, white_pawn_count, black_pawn_count)
+        white_pawn_on_file = (white_pawn_count > 0)
+        black_pawn_on_file = (black_pawn_count > 0)
 
-        ! --- Build pawn file maps, count bishops, find kings ---
+        phase = 0
         white_bishops = 0
         black_bishops = 0
-        white_pawn_on_file = .FALSE.
-        black_pawn_on_file = .FALSE.
-        white_pawn_count = 0
-        black_pawn_count = 0
         white_king_r = 1; white_king_f = 5
         black_king_r = 8; black_king_f = 5
 
-        DO i = 1, board%num_white_pieces
-            sq = board%white_pieces(i)
-            piece = board%squares_piece(sq%rank, sq%file)
-            IF (piece == BISHOP) white_bishops = white_bishops + 1
-            IF (piece == PAWN) THEN
-                white_pawn_on_file(sq%file) = .TRUE.
-                white_pawn_count(sq%file) = white_pawn_count(sq%file) + 1
-            END IF
-            IF (piece == KING) THEN
-                white_king_r = sq%rank; white_king_f = sq%file
-            END IF
-        END DO
-        DO i = 1, board%num_black_pieces
-            sq = board%black_pieces(i)
-            piece = board%squares_piece(sq%rank, sq%file)
-            IF (piece == BISHOP) black_bishops = black_bishops + 1
-            IF (piece == PAWN) THEN
-                black_pawn_on_file(sq%file) = .TRUE.
-                black_pawn_count(sq%file) = black_pawn_count(sq%file) + 1
-            END IF
-            IF (piece == KING) THEN
-                black_king_r = sq%rank; black_king_f = sq%file
-            END IF
-        END DO
-
-        ! --- Evaluate Pieces (mg/eg components) ---
-        mg_score = 0
-        eg_score = 0
+        mg_score = pawn_mg
+        eg_score = pawn_eg
 
         ! Evaluate white pieces
         DO i = 1, board%num_white_pieces
@@ -278,8 +243,15 @@ CONTAINS
             r = sq%rank
             f = sq%file
             piece = board%squares_piece(r, f)
-            eval_rank = r  ! White: rank 1-8 as-is
+            phase = phase + get_piece_phase(piece)
+            IF (piece == BISHOP) white_bishops = white_bishops + 1
+            IF (piece == KING) THEN
+                white_king_r = r
+                white_king_f = f
+            END IF
+            IF (piece == PAWN) CYCLE
 
+            eval_rank = r  ! White: rank 1-8 as-is
             CALL get_piece_pst(piece, eval_rank, f, mg_pst, eg_pst)
             mg_score = mg_score + MATERIAL_MG(piece) + mg_pst
             eg_score = eg_score + MATERIAL_EG(piece) + eg_pst
@@ -292,37 +264,6 @@ CONTAINS
                 ELSE IF (.NOT. white_pawn_on_file(f)) THEN
                     mg_score = mg_score + ROOK_SEMI_OPEN_MG
                     eg_score = eg_score + ROOK_SEMI_OPEN_EG
-                END IF
-            END IF
-
-            ! Passed pawn detection (no enemy pawns blocking or guarding)
-            IF (piece == PAWN) THEN
-                blocked = 0
-                DO pr = r + 1, BOARD_SIZE
-                    IF (board%squares_piece(pr, f) == PAWN .AND. &
-                        board%squares_color(pr, f) == BLACK) blocked = 1
-                    IF (f > 1) THEN
-                        IF (board%squares_piece(pr, f-1) == PAWN .AND. &
-                            board%squares_color(pr, f-1) == BLACK) blocked = 1
-                    END IF
-                    IF (f < BOARD_SIZE) THEN
-                        IF (board%squares_piece(pr, f+1) == PAWN .AND. &
-                            board%squares_color(pr, f+1) == BLACK) blocked = 1
-                    END IF
-                END DO
-                IF (blocked == 0) THEN
-                    mg_score = mg_score + PASSED_PAWN_BONUS_MG(r)
-                    eg_score = eg_score + PASSED_PAWN_BONUS_EG(r)
-                END IF
-                ! Connected pawns: defended by another pawn diagonally behind
-                IF (r > 1) THEN
-                    IF ((f > 1 .AND. board%squares_piece(r-1, f-1) == PAWN .AND. &
-                         board%squares_color(r-1, f-1) == WHITE) .OR. &
-                        (f < BOARD_SIZE .AND. board%squares_piece(r-1, f+1) == PAWN .AND. &
-                         board%squares_color(r-1, f+1) == WHITE)) THEN
-                        mg_score = mg_score + CONNECTED_PAWN_MG
-                        eg_score = eg_score + CONNECTED_PAWN_EG
-                    END IF
                 END IF
             END IF
 
@@ -362,8 +303,15 @@ CONTAINS
             r = sq%rank
             f = sq%file
             piece = board%squares_piece(r, f)
-            eval_rank = BOARD_SIZE - r + 1  ! Black: flip ranks (8->1, 1->8)
+            phase = phase + get_piece_phase(piece)
+            IF (piece == BISHOP) black_bishops = black_bishops + 1
+            IF (piece == KING) THEN
+                black_king_r = r
+                black_king_f = f
+            END IF
+            IF (piece == PAWN) CYCLE
 
+            eval_rank = BOARD_SIZE - r + 1  ! Black: flip ranks (8->1, 1->8)
             CALL get_piece_pst(piece, eval_rank, f, mg_pst, eg_pst)
             mg_score = mg_score - (MATERIAL_MG(piece) + mg_pst)
             eg_score = eg_score - (MATERIAL_EG(piece) + eg_pst)
@@ -376,38 +324,6 @@ CONTAINS
                 ELSE IF (.NOT. black_pawn_on_file(f)) THEN
                     mg_score = mg_score - ROOK_SEMI_OPEN_MG
                     eg_score = eg_score - ROOK_SEMI_OPEN_EG
-                END IF
-            END IF
-
-            ! Passed pawn detection (no enemy pawns blocking or guarding)
-            IF (piece == PAWN) THEN
-                blocked = 0
-                DO pr = r - 1, 1, -1
-                    IF (board%squares_piece(pr, f) == PAWN .AND. &
-                        board%squares_color(pr, f) == WHITE) blocked = 1
-                    IF (f > 1) THEN
-                        IF (board%squares_piece(pr, f-1) == PAWN .AND. &
-                            board%squares_color(pr, f-1) == WHITE) blocked = 1
-                    END IF
-                    IF (f < BOARD_SIZE) THEN
-                        IF (board%squares_piece(pr, f+1) == PAWN .AND. &
-                            board%squares_color(pr, f+1) == WHITE) blocked = 1
-                    END IF
-                END DO
-                IF (blocked == 0) THEN
-                    ! Use flipped rank for black (rank 7 = 2nd rank = index 2)
-                    mg_score = mg_score - PASSED_PAWN_BONUS_MG(BOARD_SIZE - r + 1)
-                    eg_score = eg_score - PASSED_PAWN_BONUS_EG(BOARD_SIZE - r + 1)
-                END IF
-                ! Connected pawns: defended by another pawn diagonally behind
-                IF (r < BOARD_SIZE) THEN
-                    IF ((f > 1 .AND. board%squares_piece(r+1, f-1) == PAWN .AND. &
-                         board%squares_color(r+1, f-1) == BLACK) .OR. &
-                        (f < BOARD_SIZE .AND. board%squares_piece(r+1, f+1) == PAWN .AND. &
-                         board%squares_color(r+1, f+1) == BLACK)) THEN
-                        mg_score = mg_score - CONNECTED_PAWN_MG
-                        eg_score = eg_score - CONNECTED_PAWN_EG
-                    END IF
                 END IF
             END IF
 
@@ -441,6 +357,8 @@ CONTAINS
             END IF
         END DO
 
+        phase = MIN(phase, TOTAL_PHASE)
+
         ! Bishop pair bonus
         IF (white_bishops >= 2) THEN
             mg_score = mg_score + BISHOP_PAIR_MG
@@ -450,38 +368,6 @@ CONTAINS
             mg_score = mg_score - BISHOP_PAIR_MG
             eg_score = eg_score - BISHOP_PAIR_EG
         END IF
-
-        ! Doubled and isolated pawn penalties
-        DO f = 1, BOARD_SIZE
-            ! Doubled pawns: more than one pawn on same file
-            IF (white_pawn_count(f) > 1) THEN
-                mg_score = mg_score + DOUBLED_PAWN_MG * (white_pawn_count(f) - 1)
-                eg_score = eg_score + DOUBLED_PAWN_EG * (white_pawn_count(f) - 1)
-            END IF
-            IF (black_pawn_count(f) > 1) THEN
-                mg_score = mg_score - DOUBLED_PAWN_MG * (black_pawn_count(f) - 1)
-                eg_score = eg_score - DOUBLED_PAWN_EG * (black_pawn_count(f) - 1)
-            END IF
-            ! Isolated pawns: no friendly pawns on adjacent files
-            IF (white_pawn_on_file(f)) THEN
-                has_adj_pawn = .FALSE.
-                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f - 1)
-                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f + 1)
-                IF (.NOT. has_adj_pawn) THEN
-                    mg_score = mg_score + ISOLATED_PAWN_MG
-                    eg_score = eg_score + ISOLATED_PAWN_EG
-                END IF
-            END IF
-            IF (black_pawn_on_file(f)) THEN
-                has_adj_pawn = .FALSE.
-                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f - 1)
-                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f + 1)
-                IF (.NOT. has_adj_pawn) THEN
-                    mg_score = mg_score - ISOLATED_PAWN_MG
-                    eg_score = eg_score - ISOLATED_PAWN_EG
-                END IF
-            END IF
-        END DO
 
         ! King safety: pawn shield bonus (middlegame only)
         ! Check pawns in front of white king
@@ -515,6 +401,168 @@ CONTAINS
         IF (board%current_player == BLACK) evaluate_board = -evaluate_board
 
     END FUNCTION evaluate_board
+
+    SUBROUTINE evaluate_pawns_cached(board, mg_score, eg_score, white_pawn_count, black_pawn_count)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(OUT) :: mg_score, eg_score
+        INTEGER, DIMENSION(BOARD_SIZE), INTENT(OUT) :: white_pawn_count, black_pawn_count
+        INTEGER :: index
+
+        index = INT(IAND(board%pawn_hash_key, INT(PAWN_HASH_SIZE - 1, KIND=8))) + 1
+        IF (pawn_hash_table(index)%valid .AND. pawn_hash_table(index)%key == board%pawn_hash_key) THEN
+            mg_score = pawn_hash_table(index)%mg
+            eg_score = pawn_hash_table(index)%eg
+            white_pawn_count = pawn_hash_table(index)%white_pawn_count
+            black_pawn_count = pawn_hash_table(index)%black_pawn_count
+            RETURN
+        END IF
+
+        CALL evaluate_pawns_uncached(board, mg_score, eg_score, white_pawn_count, black_pawn_count)
+        pawn_hash_table(index)%valid = .TRUE.
+        pawn_hash_table(index)%key = board%pawn_hash_key
+        pawn_hash_table(index)%mg = mg_score
+        pawn_hash_table(index)%eg = eg_score
+        pawn_hash_table(index)%white_pawn_count = white_pawn_count
+        pawn_hash_table(index)%black_pawn_count = black_pawn_count
+    END SUBROUTINE evaluate_pawns_cached
+
+    SUBROUTINE evaluate_pawns_uncached(board, mg_score, eg_score, white_pawn_count, black_pawn_count)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(OUT) :: mg_score, eg_score
+        INTEGER, DIMENSION(BOARD_SIZE), INTENT(OUT) :: white_pawn_count, black_pawn_count
+        LOGICAL :: white_pawn_on_file(BOARD_SIZE), black_pawn_on_file(BOARD_SIZE)
+        INTEGER :: i, r, f, pr, blocked, eval_rank, mg_pst, eg_pst
+        TYPE(Square_Type) :: sq
+        LOGICAL :: has_adj_pawn
+
+        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_MG(8) = (/ 0, 5, 10, 20, 35, 60, 100, 0 /)
+        INTEGER, PARAMETER :: PASSED_PAWN_BONUS_EG(8) = (/ 0, 10, 20, 40, 70, 120, 200, 0 /)
+        INTEGER, PARAMETER :: DOUBLED_PAWN_MG = -10, DOUBLED_PAWN_EG = -20
+        INTEGER, PARAMETER :: ISOLATED_PAWN_MG = -15, ISOLATED_PAWN_EG = -20
+        INTEGER, PARAMETER :: CONNECTED_PAWN_MG = 7, CONNECTED_PAWN_EG = 5
+
+        mg_score = 0
+        eg_score = 0
+        white_pawn_count = 0
+        black_pawn_count = 0
+        white_pawn_on_file = .FALSE.
+        black_pawn_on_file = .FALSE.
+
+        DO i = 1, board%num_white_pieces
+            sq = board%white_pieces(i)
+            r = sq%rank
+            f = sq%file
+            IF (board%squares_piece(r, f) /= PAWN) CYCLE
+
+            white_pawn_count(f) = white_pawn_count(f) + 1
+            white_pawn_on_file(f) = .TRUE.
+            eval_rank = r
+            CALL get_piece_pst(PAWN, eval_rank, f, mg_pst, eg_pst)
+            mg_score = mg_score + MATERIAL_MG(PAWN) + mg_pst
+            eg_score = eg_score + MATERIAL_EG(PAWN) + eg_pst
+
+            blocked = 0
+            DO pr = r + 1, BOARD_SIZE
+                IF (board%squares_piece(pr, f) == PAWN .AND. &
+                    board%squares_color(pr, f) == BLACK) blocked = 1
+                IF (f > 1) THEN
+                    IF (board%squares_piece(pr, f - 1) == PAWN .AND. &
+                        board%squares_color(pr, f - 1) == BLACK) blocked = 1
+                END IF
+                IF (f < BOARD_SIZE) THEN
+                    IF (board%squares_piece(pr, f + 1) == PAWN .AND. &
+                        board%squares_color(pr, f + 1) == BLACK) blocked = 1
+                END IF
+            END DO
+            IF (blocked == 0) THEN
+                mg_score = mg_score + PASSED_PAWN_BONUS_MG(r)
+                eg_score = eg_score + PASSED_PAWN_BONUS_EG(r)
+            END IF
+
+            IF (r > 1) THEN
+                IF ((f > 1 .AND. board%squares_piece(r - 1, f - 1) == PAWN .AND. &
+                     board%squares_color(r - 1, f - 1) == WHITE) .OR. &
+                    (f < BOARD_SIZE .AND. board%squares_piece(r - 1, f + 1) == PAWN .AND. &
+                     board%squares_color(r - 1, f + 1) == WHITE)) THEN
+                    mg_score = mg_score + CONNECTED_PAWN_MG
+                    eg_score = eg_score + CONNECTED_PAWN_EG
+                END IF
+            END IF
+        END DO
+
+        DO i = 1, board%num_black_pieces
+            sq = board%black_pieces(i)
+            r = sq%rank
+            f = sq%file
+            IF (board%squares_piece(r, f) /= PAWN) CYCLE
+
+            black_pawn_count(f) = black_pawn_count(f) + 1
+            black_pawn_on_file(f) = .TRUE.
+            eval_rank = BOARD_SIZE - r + 1
+            CALL get_piece_pst(PAWN, eval_rank, f, mg_pst, eg_pst)
+            mg_score = mg_score - (MATERIAL_MG(PAWN) + mg_pst)
+            eg_score = eg_score - (MATERIAL_EG(PAWN) + eg_pst)
+
+            blocked = 0
+            DO pr = r - 1, 1, -1
+                IF (board%squares_piece(pr, f) == PAWN .AND. &
+                    board%squares_color(pr, f) == WHITE) blocked = 1
+                IF (f > 1) THEN
+                    IF (board%squares_piece(pr, f - 1) == PAWN .AND. &
+                        board%squares_color(pr, f - 1) == WHITE) blocked = 1
+                END IF
+                IF (f < BOARD_SIZE) THEN
+                    IF (board%squares_piece(pr, f + 1) == PAWN .AND. &
+                        board%squares_color(pr, f + 1) == WHITE) blocked = 1
+                END IF
+            END DO
+            IF (blocked == 0) THEN
+                mg_score = mg_score - PASSED_PAWN_BONUS_MG(BOARD_SIZE - r + 1)
+                eg_score = eg_score - PASSED_PAWN_BONUS_EG(BOARD_SIZE - r + 1)
+            END IF
+
+            IF (r < BOARD_SIZE) THEN
+                IF ((f > 1 .AND. board%squares_piece(r + 1, f - 1) == PAWN .AND. &
+                     board%squares_color(r + 1, f - 1) == BLACK) .OR. &
+                    (f < BOARD_SIZE .AND. board%squares_piece(r + 1, f + 1) == PAWN .AND. &
+                     board%squares_color(r + 1, f + 1) == BLACK)) THEN
+                    mg_score = mg_score - CONNECTED_PAWN_MG
+                    eg_score = eg_score - CONNECTED_PAWN_EG
+                END IF
+            END IF
+        END DO
+
+        DO f = 1, BOARD_SIZE
+            IF (white_pawn_count(f) > 1) THEN
+                mg_score = mg_score + DOUBLED_PAWN_MG * (white_pawn_count(f) - 1)
+                eg_score = eg_score + DOUBLED_PAWN_EG * (white_pawn_count(f) - 1)
+            END IF
+            IF (black_pawn_count(f) > 1) THEN
+                mg_score = mg_score - DOUBLED_PAWN_MG * (black_pawn_count(f) - 1)
+                eg_score = eg_score - DOUBLED_PAWN_EG * (black_pawn_count(f) - 1)
+            END IF
+
+            IF (white_pawn_on_file(f)) THEN
+                has_adj_pawn = .FALSE.
+                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f - 1)
+                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. white_pawn_on_file(f + 1)
+                IF (.NOT. has_adj_pawn) THEN
+                    mg_score = mg_score + ISOLATED_PAWN_MG
+                    eg_score = eg_score + ISOLATED_PAWN_EG
+                END IF
+            END IF
+
+            IF (black_pawn_on_file(f)) THEN
+                has_adj_pawn = .FALSE.
+                IF (f > 1) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f - 1)
+                IF (f < BOARD_SIZE) has_adj_pawn = has_adj_pawn .OR. black_pawn_on_file(f + 1)
+                IF (.NOT. has_adj_pawn) THEN
+                    mg_score = mg_score - ISOLATED_PAWN_MG
+                    eg_score = eg_score - ISOLATED_PAWN_EG
+                END IF
+            END IF
+        END DO
+    END SUBROUTINE evaluate_pawns_uncached
 
     SUBROUTINE get_piece_pst(piece, eval_rank, file, mg_pst, eg_pst)
         INTEGER, INTENT(IN) :: piece, eval_rank, file
