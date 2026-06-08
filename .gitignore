@@ -1,3 +1,4 @@
 *.o
 *.mod
 chess
+engine_check

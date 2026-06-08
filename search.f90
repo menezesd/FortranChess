@@ -28,6 +28,7 @@ MODULE Search
     ! Pruning margins
     INTEGER, PARAMETER :: RFP_MARGIN = 80 ! Reverse futility pruning margin per depth
     INTEGER, PARAMETER :: FUTILITY_MARGIN = 120 ! Futility pruning margin per depth
+    INTEGER, PARAMETER :: PROBCUT_MARGIN = 350
 
     ! Precomputed LMR table: reduction = floor(0.77 + ln(depth) * ln(move_idx) / 2.36)
     INTEGER, PARAMETER :: LMR_MAX_DEPTH = 32
@@ -174,6 +175,7 @@ CONTAINS
         INTEGER :: prev_halfmove_clock, prev_fullmove_number, prev_repetition_count
         INTEGER :: current_depth
         INTEGER :: nmp_reduction
+        INTEGER :: probcut_beta, probcut_depth
         INTEGER :: moved_piece_type
         INTEGER :: static_eval
         LOGICAL :: improving, can_futility_prune
@@ -297,6 +299,37 @@ CONTAINS
                 best_score = beta
                 RETURN
             END IF
+        END IF
+
+        ! --- ProbCut ---
+        ! A conservative reduced search on good captures can prune clear fail-high nodes.
+        IF (.NOT. in_check .AND. current_depth >= 8 .AND. ABS(beta) < MATE_SCORE - 256) THEN
+            probcut_beta = beta + PROBCUT_MARGIN
+            probcut_depth = MAX(0, current_depth - 5)
+            CALL generate_captures(board, moves, num_moves)
+            CALL order_moves(board, moves, num_moves)
+            DO i = 1, num_moves
+                current_move = moves(i)
+                IF (current_move%captured_piece == NO_PIECE .AND. current_move%promotion_piece == NO_PIECE) CYCLE
+                IF (current_move%captured_piece /= NO_PIECE) THEN
+                    IF (see_capture(board, current_move) < 0) CYCLE
+                END IF
+
+                CALL make_move(board, current_move, unmake_info)
+                next_beta = -probcut_beta
+                next_alpha = -probcut_beta + 1
+                score = -negamax(board, probcut_depth, ply + 1, next_beta, next_alpha)
+                CALL unmake_move(board, current_move, unmake_info)
+
+                IF (search_stop_requested()) THEN
+                    best_score = 0
+                    RETURN
+                END IF
+                IF (score >= probcut_beta) THEN
+                    best_score = score
+                    RETURN
+                END IF
+            END DO
         END IF
 
         ! Generate all legal moves for current position

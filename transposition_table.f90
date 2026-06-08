@@ -10,7 +10,7 @@ MODULE Transposition_Table
     PUBLIC :: init_zobrist_keys, compute_zobrist_hash, store_tt_entry, probe_tt, &
               TT_Entry_Type, HASH_FLAG_EXACT, HASH_FLAG_ALPHA, HASH_FLAG_BETA, &
               ZOBRIST_PIECES, ZOBRIST_BLACK_TO_MOVE, ZOBRIST_CASTLING, ZOBRIST_EP_FILE, tt, &
-              new_search_generation
+              new_search_generation, clear_tt
 
     ! --- Transposition Table Constants ---
     INTEGER, PARAMETER :: HASH_FLAG_EXACT = 0
@@ -141,6 +141,22 @@ CONTAINS
     SUBROUTINE new_search_generation()
         tt_generation = tt_generation + 1
     END SUBROUTINE new_search_generation
+
+    SUBROUTINE clear_tt()
+        tt%key = 0
+        tt%depth = 0
+        tt%score = 0
+        tt%flag = HASH_FLAG_EXACT
+        tt%age = 0
+        tt%best_move%from_sq%rank = 0
+        tt%best_move%from_sq%file = 0
+        tt%best_move%to_sq%rank = 0
+        tt%best_move%to_sq%file = 0
+        tt%best_move%is_castling = .FALSE.
+        tt%best_move%is_en_passant = .FALSE.
+        tt%best_move%promotion_piece = NO_PIECE
+        tt%best_move%captured_piece = NO_PIECE
+    END SUBROUTINE clear_tt
 
     ! --- Store an entry in the TT ---
     ! Uses a depth-preferred replacement strategy with age consideration

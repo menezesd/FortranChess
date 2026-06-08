@@ -31,7 +31,7 @@ PROGRAM Fortran_Chess
     argc = COMMAND_ARGUMENT_COUNT()
     IF (argc >= 1) THEN
         CALL GET_COMMAND_ARGUMENT(1, arg1)
-        IF (TRIM(arg1) == '--uci' .OR. TRIM(arg1) == '-uci') THEN
+        IF (TRIM(arg1) == '--uci' .OR. TRIM(arg1) == '-uci' .OR. TRIM(arg1) == 'uci') THEN
             uci_mode = .TRUE.
         END IF
     END IF

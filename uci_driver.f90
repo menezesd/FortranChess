@@ -6,7 +6,7 @@ MODULE UCI_Driver
     USE Search, ONLY: find_best_move, search_node_count
     USE Search_Control, ONLY: begin_search_polling, end_search_polling, search_quit_requested, &
         has_buffered_command, pop_buffered_command, read_next_command
-    USE Transposition_Table, ONLY: init_zobrist_keys, compute_zobrist_hash
+    USE Transposition_Table, ONLY: init_zobrist_keys, compute_zobrist_hash, clear_tt
     USE Evaluation, ONLY: evaluate_board
     IMPLICIT NONE
     PRIVATE
@@ -49,6 +49,7 @@ CONTAINS
 
         IF (command == 'ucinewgame') THEN
             CALL init_board(board)
+            CALL clear_tt()
         ELSE IF (command == 'uci') THEN
             CALL uci_init()
         ELSE IF (command == 'isready') THEN
@@ -56,7 +57,7 @@ CONTAINS
         ELSE IF (command == 'debug') THEN
             CONTINUE
         ELSE IF (command == 'setoption') THEN
-            CONTINUE
+            CALL handle_setoption(line)
         ELSE IF (command == 'register') THEN
             CONTINUE
         ELSE IF (command == 'position') THEN
@@ -75,8 +76,17 @@ CONTAINS
     SUBROUTINE uci_init()
         WRITE(*,'(A)') 'id name FortranChess'
         WRITE(*,'(A)') 'id author Dean Menezes'
+        WRITE(*,'(A)') 'option name Clear Hash type button'
         WRITE(*,'(A)') 'uciok'
     END SUBROUTINE uci_init
+
+    SUBROUTINE handle_setoption(line)
+        CHARACTER(LEN=*), INTENT(IN) :: line
+
+        IF (INDEX(line, 'Clear Hash') > 0 .OR. INDEX(line, 'clear hash') > 0) THEN
+            CALL clear_tt()
+        END IF
+    END SUBROUTINE handle_setoption
 
     SUBROUTINE handle_position(board, line)
         TYPE(Board_Type), INTENT(INOUT) :: board

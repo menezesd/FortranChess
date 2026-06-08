@@ -221,8 +221,16 @@ CONTAINS
         INTEGER, PARAMETER :: BISHOP_PAIR_MG = 30, BISHOP_PAIR_EG = 50
         INTEGER, PARAMETER :: ROOK_OPEN_FILE_MG = 20, ROOK_OPEN_FILE_EG = 10
         INTEGER, PARAMETER :: ROOK_SEMI_OPEN_MG = 10, ROOK_SEMI_OPEN_EG = 5
+        INTEGER, PARAMETER :: ROOK_7TH_MG = 20, ROOK_7TH_EG = 35
+        INTEGER, PARAMETER :: CONNECTED_ROOKS_MG = 8, CONNECTED_ROOKS_EG = 12
+        INTEGER, PARAMETER :: TRAPPED_ROOK_MG = -35
+        INTEGER, PARAMETER :: KNIGHT_OUTPOST_MG = 35, KNIGHT_OUTPOST_EG = 20
+        INTEGER, PARAMETER :: KNIGHT_OUTPOST_CENTER_MG = 17, KNIGHT_OUTPOST_CENTER_EG = 10
+        INTEGER, PARAMETER :: BISHOP_OUTPOST_MG = 18, BISHOP_OUTPOST_EG = 12
+        INTEGER, PARAMETER :: BAD_BISHOP_MG = -8, BAD_BISHOP_EG = -10
         INTEGER, PARAMETER :: PAWN_SHIELD_BONUS = 10
         INTEGER, PARAMETER :: MOBILITY_BONUS_MG = 4, MOBILITY_BONUS_EG = 3
+        INTEGER, PARAMETER :: TEMPO_BONUS = 10
 
         CALL evaluate_pawns_cached(board, pawn_mg, pawn_eg, white_pawn_count, black_pawn_count)
         white_pawn_on_file = (white_pawn_count > 0)
@@ -265,10 +273,26 @@ CONTAINS
                     mg_score = mg_score + ROOK_SEMI_OPEN_MG
                     eg_score = eg_score + ROOK_SEMI_OPEN_EG
                 END IF
+                IF (r == 7) THEN
+                    mg_score = mg_score + ROOK_7TH_MG
+                    eg_score = eg_score + ROOK_7TH_EG
+                END IF
+                IF (has_connected_rook(board, r, f, WHITE)) THEN
+                    mg_score = mg_score + CONNECTED_ROOKS_MG
+                    eg_score = eg_score + CONNECTED_ROOKS_EG
+                END IF
             END IF
 
             ! Knight/Bishop mobility: count available squares
             IF (piece == KNIGHT) THEN
+                IF (is_protected_outpost(board, r, f, WHITE)) THEN
+                    mg_score = mg_score + KNIGHT_OUTPOST_MG
+                    eg_score = eg_score + KNIGHT_OUTPOST_EG
+                    IF (f >= 3 .AND. f <= 6) THEN
+                        mg_score = mg_score + KNIGHT_OUTPOST_CENTER_MG
+                        eg_score = eg_score + KNIGHT_OUTPOST_CENTER_EG
+                    END IF
+                END IF
                 mobility = 0
                 DO dir_idx = 1, 8
                     nr = r + KNIGHT_DELTAS(dir_idx, 1)
@@ -280,6 +304,14 @@ CONTAINS
                 mg_score = mg_score + mobility * MOBILITY_BONUS_MG
                 eg_score = eg_score + mobility * MOBILITY_BONUS_EG
             ELSE IF (piece == BISHOP) THEN
+                IF (is_protected_outpost(board, r, f, WHITE)) THEN
+                    mg_score = mg_score + BISHOP_OUTPOST_MG
+                    eg_score = eg_score + BISHOP_OUTPOST_EG
+                END IF
+                IF (same_color_pawn_count(board, r, f, WHITE) >= 3) THEN
+                    mg_score = mg_score + BAD_BISHOP_MG * (same_color_pawn_count(board, r, f, WHITE) - 2)
+                    eg_score = eg_score + BAD_BISHOP_EG * (same_color_pawn_count(board, r, f, WHITE) - 2)
+                END IF
                 mobility = 0
                 DO dir_idx = 1, 4
                     dr = BISHOP_DIRS(dir_idx, 1)
@@ -325,10 +357,26 @@ CONTAINS
                     mg_score = mg_score - ROOK_SEMI_OPEN_MG
                     eg_score = eg_score - ROOK_SEMI_OPEN_EG
                 END IF
+                IF (r == 2) THEN
+                    mg_score = mg_score - ROOK_7TH_MG
+                    eg_score = eg_score - ROOK_7TH_EG
+                END IF
+                IF (has_connected_rook(board, r, f, BLACK)) THEN
+                    mg_score = mg_score - CONNECTED_ROOKS_MG
+                    eg_score = eg_score - CONNECTED_ROOKS_EG
+                END IF
             END IF
 
             ! Knight/Bishop mobility
             IF (piece == KNIGHT) THEN
+                IF (is_protected_outpost(board, r, f, BLACK)) THEN
+                    mg_score = mg_score - KNIGHT_OUTPOST_MG
+                    eg_score = eg_score - KNIGHT_OUTPOST_EG
+                    IF (f >= 3 .AND. f <= 6) THEN
+                        mg_score = mg_score - KNIGHT_OUTPOST_CENTER_MG
+                        eg_score = eg_score - KNIGHT_OUTPOST_CENTER_EG
+                    END IF
+                END IF
                 mobility = 0
                 DO dir_idx = 1, 8
                     nr = r + KNIGHT_DELTAS(dir_idx, 1)
@@ -340,6 +388,14 @@ CONTAINS
                 mg_score = mg_score - mobility * MOBILITY_BONUS_MG
                 eg_score = eg_score - mobility * MOBILITY_BONUS_EG
             ELSE IF (piece == BISHOP) THEN
+                IF (is_protected_outpost(board, r, f, BLACK)) THEN
+                    mg_score = mg_score - BISHOP_OUTPOST_MG
+                    eg_score = eg_score - BISHOP_OUTPOST_EG
+                END IF
+                IF (same_color_pawn_count(board, r, f, BLACK) >= 3) THEN
+                    mg_score = mg_score - BAD_BISHOP_MG * (same_color_pawn_count(board, r, f, BLACK) - 2)
+                    eg_score = eg_score - BAD_BISHOP_EG * (same_color_pawn_count(board, r, f, BLACK) - 2)
+                END IF
                 mobility = 0
                 DO dir_idx = 1, 4
                     dr = BISHOP_DIRS(dir_idx, 1)
@@ -367,6 +423,25 @@ CONTAINS
         IF (black_bishops >= 2) THEN
             mg_score = mg_score - BISHOP_PAIR_MG
             eg_score = eg_score - BISHOP_PAIR_EG
+        END IF
+
+        IF (white_king_r == 1) THEN
+            DO i = 1, board%num_white_pieces
+                sq = board%white_pieces(i)
+                IF (board%squares_piece(sq%rank, sq%file) == ROOK .AND. sq%rank == 1) THEN
+                    IF ((white_king_f >= 6 .AND. sq%file >= 7) .OR. &
+                        (white_king_f <= 3 .AND. sq%file <= 2)) mg_score = mg_score + TRAPPED_ROOK_MG
+                END IF
+            END DO
+        END IF
+        IF (black_king_r == 8) THEN
+            DO i = 1, board%num_black_pieces
+                sq = board%black_pieces(i)
+                IF (board%squares_piece(sq%rank, sq%file) == ROOK .AND. sq%rank == 8) THEN
+                    IF ((black_king_f >= 6 .AND. sq%file >= 7) .OR. &
+                        (black_king_f <= 3 .AND. sq%file <= 2)) mg_score = mg_score - TRAPPED_ROOK_MG
+                END IF
+            END DO
         END IF
 
         ! King safety: pawn shield bonus (middlegame only)
@@ -398,9 +473,127 @@ CONTAINS
         END DO
 
         evaluate_board = tapered_pst_value(mg_score, eg_score, phase, TOTAL_PHASE)
+        IF (board%current_player == WHITE) THEN
+            evaluate_board = evaluate_board + TEMPO_BONUS
+        ELSE
+            evaluate_board = evaluate_board - TEMPO_BONUS
+        END IF
         IF (board%current_player == BLACK) evaluate_board = -evaluate_board
 
     END FUNCTION evaluate_board
+
+    LOGICAL FUNCTION is_protected_outpost(board, r, f, color) RESULT(ok)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(IN) :: r, f, color
+
+        ok = .FALSE.
+        IF (color == WHITE) THEN
+            IF (r < 4 .OR. r > 6) RETURN
+            IF (.NOT. pawn_attacks_square(board, r, f, WHITE)) RETURN
+            ok = .NOT. enemy_pawn_can_challenge(board, r, f, BLACK)
+        ELSE
+            IF (r < 3 .OR. r > 5) RETURN
+            IF (.NOT. pawn_attacks_square(board, r, f, BLACK)) RETURN
+            ok = .NOT. enemy_pawn_can_challenge(board, r, f, WHITE)
+        END IF
+    END FUNCTION is_protected_outpost
+
+    LOGICAL FUNCTION pawn_attacks_square(board, r, f, color) RESULT(attacks)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(IN) :: r, f, color
+        INTEGER :: pawn_r
+
+        attacks = .FALSE.
+        IF (color == WHITE) THEN
+            pawn_r = r - 1
+        ELSE
+            pawn_r = r + 1
+        END IF
+        IF (pawn_r < 1 .OR. pawn_r > BOARD_SIZE) RETURN
+
+        IF (f > 1) attacks = attacks .OR. &
+            (board%squares_piece(pawn_r, f - 1) == PAWN .AND. board%squares_color(pawn_r, f - 1) == color)
+        IF (f < BOARD_SIZE) attacks = attacks .OR. &
+            (board%squares_piece(pawn_r, f + 1) == PAWN .AND. board%squares_color(pawn_r, f + 1) == color)
+    END FUNCTION pawn_attacks_square
+
+    LOGICAL FUNCTION enemy_pawn_can_challenge(board, r, f, enemy_color) RESULT(can_challenge)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(IN) :: r, f, enemy_color
+        INTEGER :: pr, pf, file_start, file_end
+
+        can_challenge = .FALSE.
+        file_start = MAX(1, f - 1)
+        file_end = MIN(BOARD_SIZE, f + 1)
+        DO pf = file_start, file_end
+            IF (pf == f) CYCLE
+            IF (enemy_color == BLACK) THEN
+                DO pr = r + 1, BOARD_SIZE
+                    IF (board%squares_piece(pr, pf) == PAWN .AND. board%squares_color(pr, pf) == BLACK) THEN
+                        can_challenge = .TRUE.
+                        RETURN
+                    END IF
+                END DO
+            ELSE
+                DO pr = r - 1, 1, -1
+                    IF (board%squares_piece(pr, pf) == PAWN .AND. board%squares_color(pr, pf) == WHITE) THEN
+                        can_challenge = .TRUE.
+                        RETURN
+                    END IF
+                END DO
+            END IF
+        END DO
+    END FUNCTION enemy_pawn_can_challenge
+
+    INTEGER FUNCTION same_color_pawn_count(board, bishop_r, bishop_f, color) RESULT(count_pawns)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(IN) :: bishop_r, bishop_f, color
+        INTEGER :: r, f
+        LOGICAL :: bishop_light
+
+        count_pawns = 0
+        bishop_light = (MOD(bishop_r + bishop_f, 2) == 0)
+        DO r = 1, BOARD_SIZE
+            DO f = 1, BOARD_SIZE
+                IF (board%squares_piece(r, f) == PAWN .AND. board%squares_color(r, f) == color) THEN
+                    IF ((MOD(r + f, 2) == 0) .EQV. bishop_light) count_pawns = count_pawns + 1
+                END IF
+            END DO
+        END DO
+    END FUNCTION same_color_pawn_count
+
+    LOGICAL FUNCTION has_connected_rook(board, r, f, color) RESULT(connected)
+        TYPE(Board_Type), INTENT(IN) :: board
+        INTEGER, INTENT(IN) :: r, f, color
+        INTEGER :: rr, ff
+
+        connected = .FALSE.
+
+        DO ff = f - 1, 1, -1
+            IF (board%squares_piece(r, ff) /= NO_PIECE) THEN
+                connected = board%squares_piece(r, ff) == ROOK .AND. board%squares_color(r, ff) == color
+                RETURN
+            END IF
+        END DO
+        DO ff = f + 1, BOARD_SIZE
+            IF (board%squares_piece(r, ff) /= NO_PIECE) THEN
+                connected = board%squares_piece(r, ff) == ROOK .AND. board%squares_color(r, ff) == color
+                RETURN
+            END IF
+        END DO
+        DO rr = r - 1, 1, -1
+            IF (board%squares_piece(rr, f) /= NO_PIECE) THEN
+                connected = board%squares_piece(rr, f) == ROOK .AND. board%squares_color(rr, f) == color
+                RETURN
+            END IF
+        END DO
+        DO rr = r + 1, BOARD_SIZE
+            IF (board%squares_piece(rr, f) /= NO_PIECE) THEN
+                connected = board%squares_piece(rr, f) == ROOK .AND. board%squares_color(rr, f) == color
+                RETURN
+            END IF
+        END DO
+    END FUNCTION has_connected_rook
 
     SUBROUTINE evaluate_pawns_cached(board, mg_score, eg_score, white_pawn_count, black_pawn_count)
         TYPE(Board_Type), INTENT(IN) :: board
